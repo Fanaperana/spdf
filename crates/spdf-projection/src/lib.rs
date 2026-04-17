@@ -16,6 +16,7 @@
 #![warn(clippy::all)]
 
 use spdf_processing::clean_text::clean_raw_text;
+use spdf_processing::markup::apply_markup_tags;
 use spdf_types::{ParseConfig, ParsedPage, TextItem};
 use tracing::trace;
 
@@ -46,8 +47,8 @@ pub fn project_page(page: PageInput, debug: bool) -> ParsedPage {
         mut text_items,
     } = page;
 
-    // Skip empty items upfront.
-    text_items.retain(|t| !t.str.trim().is_empty());
+    // Skip empty items and layout placeholders upfront.
+    text_items.retain(|t| !t.str.trim().is_empty() && !t.is_placeholder.unwrap_or(false));
     if text_items.is_empty() {
         return ParsedPage {
             page_num,
@@ -146,10 +147,15 @@ fn render_row(items: &[TextItem], row: &Row, out: &mut String) {
 
     for &idx in row {
         let it = &items[idx];
-        let s = it.str.as_str();
-        if s.is_empty() {
+        let base = it.str.as_str();
+        if base.is_empty() {
             continue;
         }
+        let rendered = match &it.markup {
+            Some(m) => apply_markup_tags(m, base),
+            None => base.to_owned(),
+        };
+        let s = rendered.as_str();
 
         if let Some(pr) = prev_right {
             let gap = it.x - pr;
