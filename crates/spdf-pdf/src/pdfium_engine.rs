@@ -259,18 +259,19 @@ impl PdfEngine for PdfiumEngine {
     }
 }
 
-/// Iterate the page's objects and collect bounding boxes for every image
-/// object. Coordinates are flipped to top-left origin like text items.
+/// Iterate the page's objects and collect every image object.
 ///
-/// Failures (bounds unavailable, type-check mismatch) are ignored on a
-/// per-object basis: a noisy page shouldn't abort the whole extract.
+/// For each image, we capture PDF-space bounds (top-left origin, Y flipped)
+/// and attempt to decode the raw pixel buffer to PNG via the `image` crate.
+/// Decode failures are non-fatal: the image entry is still emitted with
+/// `data = None` so downstream OCR can re-render the region from the page.
 fn extract_images(page: &pdfium_render::prelude::PdfPage<'_>, page_height: f64) -> Vec<Image> {
     use pdfium_render::prelude::PdfPageObjectCommon;
     let mut out = Vec::new();
     for object in page.objects().iter() {
-        if object.as_image_object().is_none() {
+        let Some(image_obj) = object.as_image_object() else {
             continue;
-        }
+        };
         let Ok(bounds) = object.bounds() else {
             continue;
         };
@@ -283,16 +284,39 @@ fn extract_images(page: &pdfium_render::prelude::PdfPage<'_>, page_height: f64) 
         if w <= 0.0 || h <= 0.0 {
             continue;
         }
+
+        let png_bytes = encode_image_object_to_png(image_obj);
+
         out.push(Image {
             x: left,
             y: page_height - top,
             width: w,
             height: h,
-            data: None,
+            data: png_bytes,
             scale_factor: None,
             original_orientation_angle: None,
-            image_type: None,
+            image_type: Some("embedded".into()),
         });
     }
     out
+}
+
+/// Try to pull the decoded bitmap for an image object and re-encode it as PNG.
+/// Returns `None` on any failure.
+fn encode_image_object_to_png(
+    image_obj: &pdfium_render::prelude::PdfPageImageObject<'_>,
+) -> Option<Vec<u8>> {
+    // `get_raw_image` returns a DynamicImage if pdfium could decode the stream.
+    let dynamic = image_obj.get_raw_image().ok()?;
+    let rgba = dynamic.to_rgba8();
+    let (w, h) = (rgba.width(), rgba.height());
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let mut buf = std::io::Cursor::new(Vec::with_capacity((w * h * 4) as usize));
+    use image::ImageEncoder;
+    image::codecs::png::PngEncoder::new(&mut buf)
+        .write_image(rgba.as_raw(), w, h, image::ExtendedColorType::Rgba8)
+        .ok()?;
+    Some(buf.into_inner())
 }
