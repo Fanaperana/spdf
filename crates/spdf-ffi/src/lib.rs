@@ -89,10 +89,7 @@ pub unsafe extern "C" fn spdf_parse_path_json(
         Ok(c) => c,
         Err(e) => return write_error(out_json, &e),
     };
-    let parser = match SpdfParser::new(cfg) {
-        Ok(p) => p,
-        Err(e) => return write_error(out_json, &format!("init: {e}")),
-    };
+    let parser = SpdfParser::new(cfg);
     match parser.parse(PathBuf::from(path_str)) {
         Ok(result) => write_ok_json(out_json, &result),
         Err(e) => write_error(out_json, &format!("parse: {e}")),
@@ -118,10 +115,7 @@ pub unsafe extern "C" fn spdf_parse_bytes_json(
         Ok(c) => c,
         Err(e) => return write_error(out_json, &e),
     };
-    let parser = match SpdfParser::new(cfg) {
-        Ok(p) => p,
-        Err(e) => return write_error(out_json, &format!("init: {e}")),
-    };
+    let parser = SpdfParser::new(cfg);
     match parser.parse(bytes) {
         Ok(result) => write_ok_json(out_json, &result),
         Err(e) => write_error(out_json, &format!("parse: {e}")),
@@ -152,7 +146,7 @@ fn write_ok_json(
     let json = result
         .json
         .clone()
-        .unwrap_or_else(|| spdf_core::to_json(result));
+        .unwrap_or_else(|| spdf_output::to_json(result));
     let s = match serde_json::to_string(&json) {
         Ok(s) => s,
         Err(e) => return write_error(out, &format!("serialize: {e}")),
