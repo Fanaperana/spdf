@@ -1,0 +1,68 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/spdf-types",
+    "crates/spdf-processing",
+    "crates/spdf-projection",
+    "crates/spdf-pdf",
+    "crates/spdf-ocr",
+    "crates/spdf-convert",
+    "crates/spdf-output",
+    "crates/spdf-core",
+    "crates/spdf-cli",
+    "crates/spdf-ffi",
+    "xtask",
+]
+# spdf-node (napi-rs) is opt-in; excluded from default builds because it
+# requires a Node toolchain. Build it explicitly with --manifest-path.
+exclude = ["crates/spdf-node"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/run-llama/liteparse"
+authors = ["LlamaIndex"]
+
+[workspace.dependencies]
+# Internal crates
+spdf-types = { path = "crates/spdf-types", version = "0.1.0" }
+spdf-processing = { path = "crates/spdf-processing", version = "0.1.0" }
+spdf-projection = { path = "crates/spdf-projection", version = "0.1.0" }
+spdf-pdf = { path = "crates/spdf-pdf", version = "0.1.0" }
+spdf-ocr = { path = "crates/spdf-ocr", version = "0.1.0" }
+spdf-convert = { path = "crates/spdf-convert", version = "0.1.0" }
+spdf-output = { path = "crates/spdf-output", version = "0.1.0" }
+spdf-core = { path = "crates/spdf-core", version = "0.1.0" }
+
+# Third party
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+indexmap = { version = "2", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+rayon = "1.10"
+bytes = "1"
+infer = "0.16"
+tempfile = "3"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+reqwest = { version = "0.12", default-features = false, features = ["multipart", "json", "rustls-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "process", "io-util"] }
+clap = { version = "4", features = ["derive"] }
+insta = { version = "1", features = ["json"] }
+pdfium-render = { version = "0.9", default-features = false, features = ["thread_safe", "image_latest", "pdfium_latest"] }
+tesseract = "0.15"
+num_cpus = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+strip = "symbols"
+
+[profile.dev]
+debug = 1
+

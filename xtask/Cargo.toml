@@ -1,0 +1,19 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Internal workspace tooling: parity harness, benches, pdfium fetcher."
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+ureq = { version = "2", features = ["tls"] }
+flate2 = "1"
+tar = "0.4"

@@ -1,0 +1,13 @@
+[package]
+name = "spdf-processing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Text cleaning, bbox, markup, and search helpers."
+
+[dependencies]
+spdf-types.workspace = true
+tracing.workspace = true

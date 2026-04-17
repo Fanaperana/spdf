@@ -1,0 +1,19 @@
+[package]
+name = "spdf-projection"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Spatial grid projection — the algorithmic core of spdf."
+
+[dependencies]
+spdf-types.workspace = true
+spdf-processing.workspace = true
+indexmap.workspace = true
+tracing.workspace = true
+
+[features]
+default = []
+viz = []

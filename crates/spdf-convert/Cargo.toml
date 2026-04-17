@@ -1,0 +1,16 @@
+[package]
+name = "spdf-convert"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Shell out to LibreOffice / ImageMagick for non-PDF inputs."
+
+[dependencies]
+spdf-types.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+tempfile.workspace = true
+infer.workspace = true
