@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a bug or regression in spdf
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! A minimal reproducer
+        (especially a tiny PDF we can redistribute) makes a huge difference.
+  - type: input
+    id: version
+    attributes:
+      label: spdf version
+      description: Output of `spdf --version`
+      placeholder: "spdf 0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS (arm64)
+        - macOS (x86_64)
+        - Linux (x86_64)
+        - Linux (aarch64)
+        - Windows (x86_64)
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: reproducer
+    attributes:
+      label: Reproducer
+      description: Command you ran and, if possible, a link to or attached PDF.
+      placeholder: |
+        spdf parse sample.pdf --no-ocr --format text
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Paste the output you got, or the error message.
+      render: text
+    validations:
+      required: true

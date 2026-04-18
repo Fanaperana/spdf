@@ -44,15 +44,16 @@ pub struct PageInput {
 /// Project a batch of pages to their final text + layout.
 pub fn project_pages_to_grid(pages: Vec<PageInput>, config: &ParseConfig) -> Vec<ParsedPage> {
     let debug = config.debug.as_ref().is_some_and(|d| d.enabled);
+    let preserve_small = config.preserve_very_small_text;
     pages
         .into_iter()
-        .map(|p| project_page(p, debug))
+        .map(|p| project_page(p, debug, preserve_small))
         .collect()
 }
 
 /// Project a single page using clustering + grid layout + duplicate
 /// suppression.
-pub fn project_page(page: PageInput, debug: bool) -> ParsedPage {
+pub fn project_page(page: PageInput, debug: bool, preserve_small: bool) -> ParsedPage {
     let PageInput {
         page_num,
         width,
@@ -94,11 +95,30 @@ pub fn project_page(page: PageInput, debug: bool) -> ParsedPage {
         .fold(f64::INFINITY, f64::min);
 
     // Cluster into rows by baseline band.
-    let rows = cluster_rows(&text_items, median_h);
+    let mut rows = cluster_rows(&text_items, median_h);
 
     // Vertically merge rows whose x-ranges are disjoint (multi-column
     // sections often produce "visual one line" spanning columns).
-    let rows = merge_overlapping_rows(rows, &text_items);
+    rows = merge_overlapping_rows(rows, &text_items);
+
+    // Absorb small glyphs (h < SMALL_FONT_SIZE_THRESHOLD) into adjacent
+    // same-row items when the gap is tight. This is the critical pre-step
+    // for the small-text filter: it lets decimal points, commas, and other
+    // tiny-glyph punctuation fuse with their neighbouring digits so the row
+    // is no longer dominated by small text (port of liteparse's per-line
+    // word-merge, which runs before `filterUnprojectableText`).
+    absorb_small_glyphs(&mut rows, &mut text_items);
+
+    // Filter out rows that are dominated by very-small glyphs. These are
+    // typically QR codes, barcodes, or rasterised microprint encoded into
+    // the text layer as hundreds of tiny numeric runs. Keeping them
+    // destroys column alignment on surrounding real content. Port of
+    // liteparse `isSmallTextLine` / `filterUnprojectableText`. Items are
+    // retained in `text_items` so downstream JSON consumers can still see
+    // them — only the rendered text drops them.
+    if !preserve_small {
+        rows = filter_small_text_rows(rows, &text_items);
+    }
 
     if debug {
         trace!(
@@ -361,6 +381,171 @@ fn rows_x_collide(a: &Row, b: &Row, items: &[TextItem]) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Small-text filter (QR / barcode / microprint)
+// ---------------------------------------------------------------------------
+
+/// Liteparse constant: glyphs shorter than this are considered "very small
+/// text". 2pt @ 72 DPI → ~8px @ 300 DPI, the practical floor for readable
+/// text. Anything smaller is almost always QR / barcode / microprint.
+const SMALL_FONT_SIZE_THRESHOLD: f64 = 2.0;
+
+/// Drop rows where more than 50% of the items are below the small-font
+/// threshold (port of liteparse `isSmallTextLine`). Also drops items within
+/// a mixed row that fall below the threshold to keep the surviving row clean.
+fn filter_small_text_rows(rows: Vec<Row>, items: &[TextItem]) -> Vec<Row> {
+    let mut out: Vec<Row> = Vec::with_capacity(rows.len());
+    for row in rows {
+        if row.is_empty() {
+            continue;
+        }
+        let small = row
+            .iter()
+            .filter(|&&i| items[i].height < SMALL_FONT_SIZE_THRESHOLD)
+            .count();
+        if small * 2 > row.len() {
+            // >50% very small → drop the whole row (QR / barcode).
+            continue;
+        }
+        // Mixed row: drop the small items, keep the rest.
+        let kept: Row = row
+            .into_iter()
+            .filter(|&i| items[i].height >= SMALL_FONT_SIZE_THRESHOLD)
+            .collect();
+        if !kept.is_empty() {
+            out.push(kept);
+        }
+    }
+    out
+}
+
+/// Absorb small-glyph items (decimals, commas, kerned punctuation) into an
+/// adjacent larger item when the gap between them is small. Without this
+/// pre-pass, the subsequent small-text filter would erase all sub-2pt
+/// glyphs — including legitimate decimal separators like the "." in
+/// "$801.45". By folding them into their neighbour's text and bbox first,
+/// we guarantee the filter only strips true QR / barcode noise.
+///
+/// Rule: for each row, scan left-to-right. If item[k] has h <
+/// SMALL_FONT_SIZE_THRESHOLD and its horizontal gap to either neighbour is
+/// within one page-median-char-width, merge it into the chosen neighbour.
+fn absorb_small_glyphs(rows: &mut Vec<Row>, items: &mut Vec<TextItem>) {
+    // Estimate an absorption gap budget from the (post-merge) items.
+    let mut widths: Vec<f64> = items
+        .iter()
+        .filter_map(|it| {
+            let n = it.str.chars().count();
+            if n == 0 || it.width <= 0.0 {
+                None
+            } else {
+                Some(it.width / n as f64)
+            }
+        })
+        .collect();
+    let absorb_gap = if widths.is_empty() {
+        3.0
+    } else {
+        widths.sort_by(|a, b| a.total_cmp(b));
+        widths[widths.len() / 2].clamp(2.0, 6.0)
+    };
+
+    for row in rows.iter_mut() {
+        if row.len() < 2 {
+            continue;
+        }
+        // Ensure row is sorted by x before measuring gaps.
+        row.sort_by(|&a, &b| items[a].x.total_cmp(&items[b].x));
+
+        // Walk the row; record (small_idx, target_idx) merges.
+        let mut merges: Vec<(usize, usize)> = Vec::new();
+        for pos in 0..row.len() {
+            let idx = row[pos];
+            if items[idx].height >= SMALL_FONT_SIZE_THRESHOLD {
+                continue;
+            }
+            // Try right neighbour first (decimal + next digits), then left.
+            let left = pos.checked_sub(1).map(|p| row[p]);
+            let right = row.get(pos + 1).copied();
+            let mid = items[idx].x + items[idx].width * 0.5;
+
+            let pick = |nbr: Option<usize>| -> Option<(usize, f64)> {
+                let n = nbr?;
+                if items[n].height < SMALL_FONT_SIZE_THRESHOLD {
+                    return None;
+                }
+                let n_left = items[n].x;
+                let n_right = items[n].x + items[n].width;
+                // Distance from small item's midpoint to nearest edge of
+                // the neighbour. Measures actual visual proximity.
+                let dist = if mid < n_left {
+                    n_left - mid
+                } else if mid > n_right {
+                    mid - n_right
+                } else {
+                    0.0
+                };
+                if dist <= absorb_gap {
+                    Some((n, dist))
+                } else {
+                    None
+                }
+            };
+
+            let r = pick(right);
+            let l = pick(left);
+            let target = match (l, r) {
+                (Some((li, ld)), Some((ri, rd))) => {
+                    if rd <= ld {
+                        Some(ri)
+                    } else {
+                        Some(li)
+                    }
+                }
+                (Some((li, _)), None) => Some(li),
+                (None, Some((ri, _))) => Some(ri),
+                (None, None) => None,
+            };
+            if let Some(t) = target {
+                merges.push((idx, t));
+            }
+        }
+
+        if merges.is_empty() {
+            continue;
+        }
+
+        // Apply merges. Prefix if target is to the right (small is left of
+        // target), suffix otherwise. Extend target bbox to cover both.
+        let mut drop_set = std::collections::HashSet::new();
+        for (small, target) in merges {
+            if drop_set.contains(&small) {
+                continue;
+            }
+            let s_x = items[small].x;
+            let s_right = items[small].x + items[small].width;
+            let s_str = items[small].str.clone();
+
+            let t_x = items[target].x;
+            let t_right = items[target].x + items[target].width;
+
+            if s_x < t_x {
+                // small comes before target → prefix
+                items[target].str = format!("{s_str}{}", items[target].str);
+            } else {
+                items[target].str.push_str(&s_str);
+            }
+            let new_left = t_x.min(s_x);
+            let new_right = t_right.max(s_right);
+            items[target].x = new_left;
+            items[target].width = new_right - new_left;
+            drop_set.insert(small);
+        }
+
+        // Remove absorbed items from the row index list.
+        row.retain(|idx| !drop_set.contains(idx));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Metrics
 // ---------------------------------------------------------------------------
 
@@ -504,7 +689,7 @@ mod tests {
             height: 700.0,
             text_items: items,
         };
-        let out = project_page(page, false);
+        let out = project_page(page, false, false);
         assert_eq!(out.text.trim(), "Hello world");
     }
 
@@ -520,7 +705,7 @@ mod tests {
             height: 700.0,
             text_items: items,
         };
-        let out = project_page(page, false);
+        let out = project_page(page, false, false);
         let lines: Vec<_> = out.text.lines().map(str::trim).collect();
         assert_eq!(lines, vec!["Top", "Bot"]);
     }
@@ -540,7 +725,7 @@ mod tests {
             height: 700.0,
             text_items: items,
         };
-        let out = project_page(page, false);
+        let out = project_page(page, false, false);
         assert_eq!(out.text.trim(), "1836");
     }
 
@@ -558,7 +743,7 @@ mod tests {
             height: 700.0,
             text_items: items,
         };
-        let out = project_page(page, false);
+        let out = project_page(page, false, false);
         assert_eq!(out.text.trim(), "Tax");
     }
 
@@ -576,7 +761,7 @@ mod tests {
             height: 700.0,
             text_items: items,
         };
-        let out = project_page(page, false);
+        let out = project_page(page, false, false);
         assert_eq!(out.text.trim(), "Low");
     }
 
@@ -595,7 +780,42 @@ mod tests {
             height: 700.0,
             text_items: items,
         };
-        let out = project_page(page, false);
+        let out = project_page(page, false, false);
         assert_eq!(out.text.trim(), "Dummy PDF file");
+    }
+
+    #[test]
+    fn qr_code_microglyph_row_is_dropped_by_default() {
+        // Mix one normal row with a row of sub-2pt QR-encoded numbers.
+        // The QR row should vanish from rendered text.
+        let mut items = vec![
+            ti("Header", 10.0, 50.0, 40.0, 10.0),
+            ti("Footer", 10.0, 200.0, 40.0, 10.0),
+        ];
+        for i in 0..10 {
+            let mut it = ti("50505", 60.0 + i as f64 * 22.0, 100.0, 21.6, 1.5);
+            it.font_size = Some(1.5);
+            items.push(it);
+        }
+        let page = PageInput {
+            page_num: 1,
+            width: 500.0,
+            height: 700.0,
+            text_items: items.clone(),
+        };
+        let out = project_page(page, false, false);
+        assert!(!out.text.contains("50505"), "QR row leaked: {:?}", out.text);
+        assert!(out.text.contains("Header"));
+        assert!(out.text.contains("Footer"));
+
+        // And the inverse: with preserve_small=true, micro-text is kept.
+        let page2 = PageInput {
+            page_num: 1,
+            width: 500.0,
+            height: 700.0,
+            text_items: items,
+        };
+        let out2 = project_page(page2, false, true);
+        assert!(out2.text.contains("50505"));
     }
 }
