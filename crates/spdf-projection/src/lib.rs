@@ -1,14 +1,30 @@
 //! Spatial text reconstruction.
 //!
-//! Groups text items into rows by baseline overlap, then lays each row onto a
-//! character grid so that the output preserves the document's horizontal
-//! layout (columns, tables, leading indentation). Also deduplicates the
-//! overlapping "shadow" glyphs that PDFium emits for faux-bold text.
+//! Reconstructs readable text from PDFium's raw glyph-level extraction,
+//! approximating the column-aware layout that `liteparse`'s
+//! `src/processing/gridProjection.ts` produces from PDF.js word-level runs.
 //!
-//! This is a pragmatic subset of `liteparse/src/processing/gridProjection.ts`.
-//! It captures correct reading order, column preservation, and duplicate-run
-//! suppression — enough for most paragraphs and simple tables. Anchor-based
-//! alignment and full table inference are future work.
+//! ## Pipeline
+//!
+//! 1. **Drop placeholders / empty strings.**
+//! 2. **Dedup faux-bold shadow glyphs** — PDFs often draw text twice at a
+//!    slight offset to simulate bold. PDFium surfaces both copies. We detect
+//!    and drop the shadow by looking for overlapping boxes with identical
+//!    text (liteparse/gridProjection.ts: "same text rendered twice").
+//! 3. **Merge continuous glyphs.** Adjacent items on the same baseline with
+//!    touching or sub-pixel-overlapping boxes are concatenated (port of
+//!    liteparse `canMerge`: y/h equal and xDelta ∈ [-1.0, 0.1]). This folds
+//!    per-character PDFium runs back into words.
+//! 4. **Group into rows** using a baseline-band clustering anchored to the
+//!    page's median glyph height. Tall decorative items (vertical bars,
+//!    rules) cannot stretch a row.
+//! 5. **Merge rows vertically** if their x-ranges are disjoint and their
+//!    y-extents overlap (liteparse final-pass line merger).
+//! 6. **Render each row** onto a character grid anchored at the page's left
+//!    edge. Gaps are classified: very-wide → column padding; narrow → space;
+//!    tight kerning → concatenate.
+//! 7. **Tidy layout**: strip trailing whitespace, collapse runs of blank
+//!    lines, keep internal column padding.
 
 #![warn(clippy::all)]
 
@@ -16,7 +32,7 @@ use spdf_processing::markup::apply_markup_tags;
 use spdf_types::{ParseConfig, ParsedPage, TextItem};
 use tracing::trace;
 
-/// Per-page layout reconstruction input. Mirrors `PageData` in the PDF engine.
+/// Per-page layout reconstruction input.
 #[derive(Debug, Clone)]
 pub struct PageInput {
     pub page_num: u32,
@@ -34,7 +50,7 @@ pub fn project_pages_to_grid(pages: Vec<PageInput>, config: &ParseConfig) -> Vec
         .collect()
 }
 
-/// Project a single page using row grouping + grid layout + duplicate
+/// Project a single page using clustering + grid layout + duplicate
 /// suppression.
 pub fn project_page(page: PageInput, debug: bool) -> ParsedPage {
     let PageInput {
@@ -45,7 +61,7 @@ pub fn project_page(page: PageInput, debug: bool) -> ParsedPage {
     } = page;
 
     // Drop empty/placeholder items upfront.
-    text_items.retain(|t| !t.str.trim().is_empty() && !t.is_placeholder.unwrap_or(false));
+    text_items.retain(|t| !t.str.is_empty() && !t.is_placeholder.unwrap_or(false));
     if text_items.is_empty() {
         return ParsedPage {
             page_num,
@@ -57,30 +73,39 @@ pub fn project_page(page: PageInput, debug: bool) -> ParsedPage {
         };
     }
 
-    // Sort by y then x for deterministic grouping.
+    // Sort by (y, x) for deterministic ordering.
     text_items.sort_by(|a, b| a.y.total_cmp(&b.y).then(a.x.total_cmp(&b.x)));
 
-    // Drop overlapping duplicate glyphs (the faux-bold "shadow" runs PDFium
-    // emits). Performed before row grouping so the grid counts unique glyphs.
-    deduplicate_overlapping(&mut text_items);
+    // Drop faux-bold shadow duplicates (same text, overlapping boxes).
+    deduplicate_shadows(&mut text_items);
 
-    // Compute a global character unit (one output column = `char_unit` pts).
-    // Use the median per-glyph width; fall back to font-size/2 or 6pt.
+    // Stitch per-character runs back into words (xDelta tight + same baseline).
+    merge_continuous_runs(&mut text_items);
+
+    // Re-sort after mutation to keep deterministic order.
+    text_items.sort_by(|a, b| a.y.total_cmp(&b.y).then(a.x.total_cmp(&b.x)));
+
+    // Page-level metrics used for clustering + rendering.
+    let median_h = median_height(&text_items).max(1.0);
     let char_unit = estimate_char_unit(&text_items);
-
-    // Anchor indentation relative to the leftmost x across the whole page so
-    // rows keep their relative column positions.
     let page_left = text_items
         .iter()
         .map(|it| it.x)
         .fold(f64::INFINITY, f64::min);
 
-    let rows = group_into_rows(&text_items);
+    // Cluster into rows by baseline band.
+    let rows = cluster_rows(&text_items, median_h);
+
+    // Vertically merge rows whose x-ranges are disjoint (multi-column
+    // sections often produce "visual one line" spanning columns).
+    let rows = merge_overlapping_rows(rows, &text_items);
+
     if debug {
         trace!(
             page = page_num,
             rows = rows.len(),
             char_unit = char_unit,
+            median_h = median_h,
             "spdf: projection rows"
         );
     }
@@ -94,9 +119,6 @@ pub fn project_page(page: PageInput, debug: bool) -> ParsedPage {
         render_row_grid(&text_items, row, char_unit, page_left, &mut out);
     }
 
-    // Light cleanup: strip trailing whitespace per line and collapse more than
-    // one consecutive blank line. We intentionally preserve intra-line runs of
-    // spaces so column alignment survives.
     let text = tidy_layout(&out);
 
     ParsedPage {
@@ -109,47 +131,71 @@ pub fn project_page(page: PageInput, debug: bool) -> ParsedPage {
     }
 }
 
-/// Remove items whose bounding box significantly overlaps a previously kept
-/// item with the same text. This fixes the "TaTax Infofo" duplication where
-/// PDFium emits a glyph twice (main + offset shadow) to simulate bold.
-///
-/// We consider two items "duplicates" when:
-///   1. Their strings are identical, AND
-///   2. Their rectangles overlap by more than 50% of the smaller area, AND
-///   3. They are on the same baseline.
-fn deduplicate_overlapping(items: &mut Vec<TextItem>) {
-    let mut keep: Vec<bool> = vec![true; items.len()];
-    for i in 0..items.len() {
+// ---------------------------------------------------------------------------
+// Shadow dedup
+// ---------------------------------------------------------------------------
+
+/// Remove faux-bold shadow copies: items with identical text whose bboxes
+/// share any x-overlap and nearly-same midline. The survivor's bounds are
+/// extended to the union of both copies so the downstream gap calculation
+/// doesn't produce artificial whitespace between the survivor and the next
+/// glyph (port of liteparse's `mergePageBbox`).
+fn deduplicate_shadows(items: &mut Vec<TextItem>) {
+    let n = items.len();
+    let mut keep = vec![true; n];
+    // `union_into[j] = Some(i)` means glyph j should be merged into i.
+    let mut merges: Vec<(usize, usize)> = Vec::new();
+    for i in 0..n {
         if !keep[i] {
             continue;
         }
-        for j in (i + 1)..items.len() {
+        for j in (i + 1)..n {
             if !keep[j] {
                 continue;
             }
             if items[i].str != items[j].str {
                 continue;
             }
-            let h = items[i].height.max(items[j].height).max(1.0);
-            if (items[i].y - items[j].y).abs() > h * 0.5 {
+            let hi = items[i].height.max(1.0);
+            let hj = items[j].height.max(1.0);
+            let mid_i = items[i].y + hi * 0.5;
+            let mid_j = items[j].y + hj * 0.5;
+            let h_max = hi.max(hj);
+            if (mid_i - mid_j).abs() > h_max * 0.75 {
                 continue;
             }
-            let overlap = rect_overlap_area(
-                items[i].x,
-                items[i].y,
-                items[i].width,
-                items[i].height,
-                items[j].x,
-                items[j].y,
-                items[j].width,
-                items[j].height,
-            );
-            let a = (items[i].width * items[i].height).max(1.0);
-            let b = (items[j].width * items[j].height).max(1.0);
-            if overlap / a.min(b) > 0.5 {
+            let a_left = items[i].x;
+            let a_right = items[i].x + items[i].width;
+            let b_left = items[j].x;
+            let b_right = items[j].x + items[j].width;
+            let x_overlap = a_right.min(b_right) - a_left.max(b_left);
+            if x_overlap < 0.0 {
+                continue;
+            }
+            // Keep the taller (main) copy; union its bounds with the shadow.
+            if hj < hi - 1e-6 {
+                merges.push((i, j));
+                keep[j] = false;
+            } else if hi < hj - 1e-6 {
+                merges.push((j, i));
+                keep[i] = false;
+                break;
+            } else {
+                merges.push((i, j));
                 keep[j] = false;
             }
         }
+    }
+    // Apply bbox unions. Each merge (keeper, dropped).
+    for (k, d) in merges {
+        let d_left = items[d].x;
+        let d_right = items[d].x + items[d].width;
+        let k_left = items[k].x;
+        let k_right = items[k].x + items[k].width;
+        let new_left = k_left.min(d_left);
+        let new_right = k_right.max(d_right);
+        items[k].x = new_left;
+        items[k].width = new_right - new_left;
     }
     let mut idx = 0;
     items.retain(|_| {
@@ -159,28 +205,179 @@ fn deduplicate_overlapping(items: &mut Vec<TextItem>) {
     });
 }
 
-fn rect_overlap_area(
-    ax: f64,
-    ay: f64,
-    aw: f64,
-    ah: f64,
-    bx: f64,
-    by: f64,
-    bw: f64,
-    bh: f64,
-) -> f64 {
-    let left = ax.max(bx);
-    let right = (ax + aw).min(bx + bw);
-    let top = ay.max(by);
-    let bot = (ay + ah).min(by + bh);
-    if left >= right || top >= bot {
-        0.0
-    } else {
-        (right - left) * (bot - top)
+// ---------------------------------------------------------------------------
+// Continuous-run merge (liteparse `canMerge`)
+// ---------------------------------------------------------------------------
+
+/// Merge adjacent items that share a baseline and touch horizontally. This
+/// fuses per-glyph extraction into word-level runs.
+///
+/// Liteparse's rule: same y, same h, `xDelta ∈ [-1.0, 0.1]`. We relax slightly
+/// because PDFium reports y/h with sub-pixel jitter.
+fn merge_continuous_runs(items: &mut Vec<TextItem>) {
+    if items.len() < 2 {
+        return;
+    }
+    // Sort row-primary, column-secondary using a loose y-band so adjacent
+    // glyphs merge regardless of micro-jitter.
+    items.sort_by(|a, b| a.y.total_cmp(&b.y).then(a.x.total_cmp(&b.x)));
+
+    let mut i = 1;
+    while i < items.len() {
+        let (prev, curr) = {
+            let (l, r) = items.split_at_mut(i);
+            (&mut l[i - 1], &r[0])
+        };
+        let same_baseline = (prev.y - curr.y).abs() < 0.5
+            && (prev.height - curr.height).abs() < 0.5;
+        if same_baseline {
+            let x_delta = curr.x - prev.x - prev.width;
+            // Tight-touch window: overlap up to ~1pt, gap up to ~0.1pt.
+            if (-1.0..=0.1).contains(&x_delta) {
+                let new_right = (curr.x + curr.width).max(prev.x + prev.width);
+                prev.width = (new_right - prev.x).max(prev.width);
+                prev.str.push_str(&curr.str);
+                items.remove(i);
+                continue;
+            }
+        }
+        i += 1;
     }
 }
 
-/// Median per-glyph width across all items, clamped to a sensible range.
+// ---------------------------------------------------------------------------
+// Row clustering
+// ---------------------------------------------------------------------------
+
+type Row = Vec<usize>;
+
+/// Cluster items into rows using baseline midline bands. Band width is
+/// anchored to the page's median glyph height so a single tall item (like a
+/// vertical bar) cannot swallow neighbouring rows.
+fn cluster_rows(items: &[TextItem], median_h: f64) -> Vec<Row> {
+    // Each item's midline = y + h/2. Two items are in the same row if
+    // their midlines are within `band`.
+    let band = (median_h * 0.6).max(3.0);
+
+    // Collect (idx, mid) and sort by mid.
+    let mut pairs: Vec<(usize, f64)> = items
+        .iter()
+        .enumerate()
+        .map(|(i, it)| (i, it.y + it.height.max(1.0) * 0.5))
+        .collect();
+    pairs.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+    let mut rows: Vec<Row> = Vec::new();
+    let mut row_mid_sum: Vec<f64> = Vec::new();
+    let mut row_count: Vec<f64> = Vec::new();
+
+    for (idx, mid) in pairs {
+        let row = rows
+            .iter()
+            .enumerate()
+            .find(|(r, _)| (row_mid_sum[*r] / row_count[*r] - mid).abs() < band)
+            .map(|(r, _)| r);
+        match row {
+            Some(r) => {
+                rows[r].push(idx);
+                row_mid_sum[r] += mid;
+                row_count[r] += 1.0;
+            }
+            None => {
+                rows.push(vec![idx]);
+                row_mid_sum.push(mid);
+                row_count.push(1.0);
+            }
+        }
+    }
+
+    // Sort rows top-to-bottom by average midline.
+    let mut order: Vec<usize> = (0..rows.len()).collect();
+    order.sort_by(|&a, &b| {
+        let ma = row_mid_sum[a] / row_count[a];
+        let mb = row_mid_sum[b] / row_count[b];
+        ma.total_cmp(&mb)
+    });
+    let mut out: Vec<Row> = order.into_iter().map(|i| rows[i].clone()).collect();
+
+    // Within each row, sort by x.
+    for row in out.iter_mut() {
+        row.sort_by(|&a, &b| items[a].x.total_cmp(&items[b].x));
+    }
+    out
+}
+
+/// Merge consecutive rows whose y-ranges overlap AND whose x-footprints are
+/// disjoint. This is liteparse's final-pass line merge for cases where a
+/// split-baseline row was prematurely broken apart.
+fn merge_overlapping_rows(mut rows: Vec<Row>, items: &[TextItem]) -> Vec<Row> {
+    let mut i = 1;
+    while i < rows.len() {
+        let prev_y = y_range(&rows[i - 1], items);
+        let cur_y = y_range(&rows[i], items);
+        let y_overlap = prev_y.1 > cur_y.0 && prev_y.0 < cur_y.1;
+        if y_overlap {
+            let x_collide = rows_x_collide(&rows[i - 1], &rows[i], items);
+            if !x_collide {
+                let cur = std::mem::take(&mut rows[i]);
+                rows[i - 1].extend(cur);
+                rows[i - 1].sort_by(|&a, &b| items[a].x.total_cmp(&items[b].x));
+                rows.remove(i);
+                continue;
+            }
+        }
+        i += 1;
+    }
+    rows
+}
+
+fn y_range(row: &Row, items: &[TextItem]) -> (f64, f64) {
+    let mut lo = f64::INFINITY;
+    let mut hi = f64::NEG_INFINITY;
+    for &idx in row {
+        let it = &items[idx];
+        lo = lo.min(it.y);
+        hi = hi.max(it.y + it.height.max(1.0));
+    }
+    (lo, hi)
+}
+
+fn rows_x_collide(a: &Row, b: &Row, items: &[TextItem]) -> bool {
+    for &i in a {
+        let ia = &items[i];
+        let ax0 = ia.x;
+        let ax1 = ia.x + ia.width;
+        for &j in b {
+            let ib = &items[j];
+            let bx0 = ib.x;
+            let bx1 = ib.x + ib.width;
+            let ov = ax1.min(bx1) - ax0.max(bx0);
+            if ov > 1.0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
+// Metrics
+// ---------------------------------------------------------------------------
+
+fn median_height(items: &[TextItem]) -> f64 {
+    let mut h: Vec<f64> = items
+        .iter()
+        .filter(|it| it.height > 0.0)
+        .map(|it| it.height)
+        .collect();
+    if h.is_empty() {
+        return 10.0;
+    }
+    h.sort_by(|a, b| a.total_cmp(b));
+    h[h.len() / 2]
+}
+
+/// Median per-glyph width, clamped to [3, 12] pt.
 fn estimate_char_unit(items: &[TextItem]) -> f64 {
     let mut widths: Vec<f64> = items
         .iter()
@@ -197,63 +394,12 @@ fn estimate_char_unit(items: &[TextItem]) -> f64 {
         return 6.0;
     }
     widths.sort_by(|a, b| a.total_cmp(b));
-    let median = widths[widths.len() / 2];
-    // Clamp to [3, 12] pt — wide enough to avoid glyph collisions, narrow
-    // enough that column padding stays legible.
-    median.clamp(3.0, 12.0)
+    widths[widths.len() / 2].clamp(3.0, 12.0)
 }
 
-/// A row is a list of text-item indices that share a baseline band.
-type Row = Vec<usize>;
-
-fn group_into_rows(items: &[TextItem]) -> Vec<Row> {
-    let mut rows: Vec<Row> = Vec::new();
-    // Track each row's accumulated vertical extent so we can decide when a new
-    // item extends vs starts a new row.
-    let mut extents: Vec<(f64, f64)> = Vec::new(); // (top, bottom)
-
-    for (i, it) in items.iter().enumerate() {
-        let top = it.y;
-        let bottom = it.y + it.height.max(1.0);
-        let mid = (top + bottom) * 0.5;
-        let h = (bottom - top).max(1.0);
-
-        // Find an existing row whose midline overlaps this item by at least
-        // ~50% of the item's height. That tolerance absorbs superscripts,
-        // subscripts, and tight leading without bleeding into the next line.
-        let matched = rows.iter().zip(extents.iter()).position(|(_, (rt, rb))| {
-            let row_mid = (rt + rb) * 0.5;
-            (row_mid - mid).abs() < h * 0.5
-        });
-        match matched {
-            Some(idx) => {
-                rows[idx].push(i);
-                let (rt, rb) = &mut extents[idx];
-                *rt = rt.min(top);
-                *rb = rb.max(bottom);
-            }
-            None => {
-                rows.push(vec![i]);
-                extents.push((top, bottom));
-            }
-        }
-    }
-
-    // Order rows top-to-bottom by their midline.
-    let mut order: Vec<usize> = (0..rows.len()).collect();
-    order.sort_by(|&a, &b| {
-        let ma = (extents[a].0 + extents[a].1) * 0.5;
-        let mb = (extents[b].0 + extents[b].1) * 0.5;
-        ma.total_cmp(&mb)
-    });
-
-    // Within each row, sort by x.
-    let mut out: Vec<Row> = order.into_iter().map(|i| rows[i].clone()).collect();
-    for row in out.iter_mut() {
-        row.sort_by(|&a, &b| items[a].x.total_cmp(&items[b].x));
-    }
-    out
-}
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
 
 fn render_row_grid(
     items: &[TextItem],
@@ -264,6 +410,11 @@ fn render_row_grid(
 ) {
     let row_start = out.chars().count();
     let mut prev_right: Option<f64> = None;
+    // A page-median char width gives a stable, font-agnostic threshold.
+    // Narrow glyphs like "I" or "/" have tiny per-item widths that would
+    // otherwise make every neighbour gap look like a word break.
+    let space_gap = char_unit * 0.55;
+    let column_gap = char_unit * 2.5;
 
     for (pos, &idx) in row.iter().enumerate() {
         let it = &items[idx];
@@ -277,7 +428,6 @@ fn render_row_grid(
         };
 
         if pos == 0 {
-            // Indent to the item's absolute column on the page.
             let col = ((it.x - page_left) / char_unit).round().max(0.0) as usize;
             for _ in 0..col {
                 out.push(' ');
@@ -285,11 +435,9 @@ fn render_row_grid(
         } else {
             let pr = prev_right.unwrap_or(it.x);
             let gap_pts = it.x - pr;
-            // A gap wider than ~1.5 char units is treated as a column break:
-            // pad to the exact column the item lives in. Smaller gaps emit
-            // either a single space (word break) or nothing (tight kerning).
             let cur_cols = out.chars().count() - row_start;
-            if gap_pts > char_unit * 1.5 {
+            if gap_pts > column_gap {
+                // Wide gap: pad to the item's absolute column.
                 let col = ((it.x - page_left) / char_unit).round().max(0.0) as usize;
                 if cur_cols < col {
                     for _ in 0..(col - cur_cols) {
@@ -298,14 +446,15 @@ fn render_row_grid(
                 } else if !out.ends_with(' ') {
                     out.push(' ');
                 }
-            } else if gap_pts > char_unit * 0.3 {
+            } else if gap_pts > space_gap {
+                // Word boundary: at most one space.
                 let ends_ws = out.chars().last().is_some_and(|c| c.is_whitespace());
                 let starts_ws = rendered.chars().next().is_some_and(|c| c.is_whitespace());
                 if !ends_ws && !starts_ws {
                     out.push(' ');
                 }
             }
-            // else: tight kerning → concatenate directly.
+            // else: tight kerning within a word → concatenate.
         }
         out.push_str(&rendered);
         prev_right = Some(it.x + it.width.max(0.0));
@@ -377,10 +526,62 @@ mod tests {
     }
 
     #[test]
+    fn tight_kerning_concatenates_without_spaces() {
+        // Simulates PDFium emitting per-glyph runs that should fuse.
+        let items = vec![
+            ti("1", 10.0, 100.0, 3.0, 10.0),
+            ti("8", 13.0, 100.0, 3.0, 10.0),
+            ti("3", 16.0, 100.0, 3.0, 10.0),
+            ti("6", 19.0, 100.0, 3.0, 10.0),
+        ];
+        let page = PageInput {
+            page_num: 1,
+            width: 500.0,
+            height: 700.0,
+            text_items: items,
+        };
+        let out = project_page(page, false);
+        assert_eq!(out.text.trim(), "1836");
+    }
+
+    #[test]
+    fn faux_bold_shadow_is_deduped() {
+        // Two copies of "Ta" offset by <1pt — simulated faux-bold. Keep taller.
+        let items = vec![
+            ti("Ta", 100.0, 50.0, 8.6, 11.0), // main
+            ti("Ta", 100.5, 51.5, 6.4, 8.0),  // shadow (shorter)
+            ti("x", 109.0, 50.0, 5.0, 11.0),
+        ];
+        let page = PageInput {
+            page_num: 1,
+            width: 500.0,
+            height: 700.0,
+            text_items: items,
+        };
+        let out = project_page(page, false);
+        assert_eq!(out.text.trim(), "Tax");
+    }
+
+    #[test]
+    fn ascender_and_descender_glyphs_stay_on_same_row() {
+        // Uppercase at y=50 h=11, lowercase at y=53 h=8 — classic case.
+        let items = vec![
+            ti("L", 100.0, 49.7, 6.4, 11.0),
+            ti("o", 107.0, 52.8, 7.6, 8.0),
+            ti("w", 115.2, 52.9, 11.8, 7.8),
+        ];
+        let page = PageInput {
+            page_num: 1,
+            width: 500.0,
+            height: 700.0,
+            text_items: items,
+        };
+        let out = project_page(page, false);
+        assert_eq!(out.text.trim(), "Low");
+    }
+
+    #[test]
     fn reading_order_is_x_sorted_per_row() {
-        // Simulates PDFium returning segments in draw order, not reading order.
-        // Glyph x positions are contiguous (tight kerning) so no word-internal
-        // gap triggers an unwanted space.
         let items = vec![
             ti("fi", 80.0, 100.0, 8.0, 12.0),
             ti("Dumm", 20.0, 100.0, 26.0, 12.0),
