@@ -28,6 +28,7 @@ that clear the IoU>=0.5 bar ("localisation precision").
 """
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
@@ -132,6 +133,67 @@ def render_first_page(fixture: Path, work: Path) -> Path:
         )
         return prefix.with_name("page-1.png")
     return fixture  # already a raster image
+
+
+# Regex for pdftotext -bbox-layout word entries. Example:
+#   <word xMin="72.000000" yMin="56.904000" xMax="95.328000" yMax="67.920000">Form</word>
+BBOX_WORD_RE = re.compile(
+    r'<word\s+xMin="([\d.]+)"\s+yMin="([\d.]+)"\s+'
+    r'xMax="([\d.]+)"\s+yMax="([\d.]+)"[^>]*>(.*?)</word>',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def pdftotext_ground_truth(pdf: Path) -> list[Word]:
+    """Run `pdftotext -bbox-layout -f 1 -l 1` and return per-word boxes in PDF points.
+
+    pdftotext emits an XHTML file with one `<word>` element per extracted
+    glyph run, coordinates already in PDF points with top-left origin — the
+    same convention spdf uses. This serves as the **born-digital oracle**:
+    for PDFs with a real text layer, pdftotext is overwhelmingly correct
+    and does not hallucinate the way a raster OCR run does on form pages.
+    """
+    if pdf.suffix.lower() != ".pdf":
+        return []
+    with tempfile.NamedTemporaryFile(suffix=".xhtml", delete=False) as tmp:
+        out_path = Path(tmp.name)
+    try:
+        res = subprocess.run(
+            [
+                "pdftotext",
+                "-bbox-layout",
+                "-f",
+                "1",
+                "-l",
+                "1",
+                str(pdf),
+                str(out_path),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode != 0 or not out_path.is_file():
+            return []
+        xhtml = out_path.read_text(errors="replace")
+    finally:
+        out_path.unlink(missing_ok=True)
+
+    words: list[Word] = []
+    for m in BBOX_WORD_RE.finditer(xhtml):
+        x1, y1, x2, y2, raw = m.groups()
+        text = normalise(html.unescape(raw))
+        if not text:
+            continue
+        try:
+            x1f, y1f, x2f, y2f = float(x1), float(y1), float(x2), float(y2)
+        except ValueError:
+            continue
+        w = x2f - x1f
+        h = y2f - y1f
+        if w <= 0 or h <= 0:
+            continue
+        words.append(Word(text=text, x=x1f, y=y1f, w=w, h=h))
+    return words
 
 
 def tesseract_ground_truth(image: Path) -> list[Word]:
@@ -327,7 +389,12 @@ def main() -> int:
             print(f"== {fixture.name} ==")
             image = render_first_page(fixture, work)
             truth = tesseract_ground_truth(image)
-            print(f"  ground truth: {len(truth)} words")
+            print(f"  ground truth (tesseract): {len(truth)} words")
+
+            # Second oracle: pdftotext -bbox-layout (born-digital only).
+            bbox_truth = pdftotext_ground_truth(fixture)
+            if bbox_truth:
+                print(f"  ground truth (pdftotext): {len(bbox_truth)} words")
 
             spdf_words = run_spdf_json(fixture)
             spdf_stats = evaluate(spdf_words, truth)
@@ -336,21 +403,31 @@ def main() -> int:
                 f"iou>={IOU_THRESHOLD}: {pct(spdf_stats['iou_ge_threshold_rate'])} "
                 f"centroid_err={spdf_stats['mean_centroid_err_pt']:.2f}pt"
             )
+            spdf_bbox = evaluate(spdf_words, bbox_truth) if bbox_truth else None
+            if spdf_bbox:
+                print(f"    vs pdftotext: f1={pct(spdf_bbox['f1'])} mean_iou={spdf_bbox['mean_iou']:.3f}")
 
             lite_words = run_lite_json(fixture)
             lite_stats = evaluate(lite_words, truth) if lite_words else None
+            lite_bbox = evaluate(lite_words, bbox_truth) if (lite_words and bbox_truth) else None
             if lite_stats:
                 print(
                     f"  liteparse: f1={pct(lite_stats['f1'])} mean_iou={lite_stats['mean_iou']:.3f} "
                     f"iou>={IOU_THRESHOLD}: {pct(lite_stats['iou_ge_threshold_rate'])} "
                     f"centroid_err={lite_stats['mean_centroid_err_pt']:.2f}pt"
                 )
+                if lite_bbox:
+                    print(f"    vs pdftotext: f1={pct(lite_bbox['f1'])} mean_iou={lite_bbox['mean_iou']:.3f}")
             else:
                 print("  liteparse: skipped (set LITEPARSE_DIR)")
 
             row = {"fixture": fixture.name, "spdf": spdf_stats}
             if lite_stats:
                 row["lite"] = lite_stats
+            if spdf_bbox:
+                row["spdf_vs_pdftotext"] = spdf_bbox
+            if lite_bbox:
+                row["lite_vs_pdftotext"] = lite_bbox
             rows.append(row)
 
     RESULTS.mkdir(parents=True, exist_ok=True)
@@ -409,6 +486,48 @@ def main() -> int:
                 f"| liteparse | {pct(mean('f1','lite'))} | {mean('mean_iou','lite'):.3f} | "
                 f"{pct(mean('iou_ge_threshold_rate','lite'))} | {mean('mean_centroid_err_pt','lite'):.2f} pt |"
             )
+
+        # Second oracle: pdftotext -bbox-layout (born-digital PDFs only).
+        if any("spdf_vs_pdftotext" in r for r in rows):
+            lines.append("")
+            lines.append("## Vs pdftotext oracle (born-digital PDFs)\n")
+            lines.append(
+                "Ground truth is `pdftotext -bbox-layout` word boxes. Excludes "
+                "raster fixtures and PDFs whose text layer pdftotext cannot "
+                "read (e.g. CID fonts with no ToUnicode). Higher is better; "
+                "this isolates spatial accuracy on the cases where the PDF "
+                "actually has a ground truth.\n"
+            )
+            lines.append(
+                "| fixture | engine | F1 | mean IoU | IoU≥0.5 | centroid err |"
+            )
+            lines.append("|---|---|---:|---:|---:|---:|")
+            for r in rows:
+                for name, key in (("spdf", "spdf_vs_pdftotext"), ("liteparse", "lite_vs_pdftotext")):
+                    if key not in r:
+                        continue
+                    s = r[key]
+                    lines.append(
+                        f"| {r['fixture']} | {name} | {pct(s['f1'])} | {s['mean_iou']:.3f} | "
+                        f"{pct(s['iou_ge_threshold_rate'])} | {s['mean_centroid_err_pt']:.2f} pt |"
+                    )
+            lines.append("")
+            lines.append("### Mean (pdftotext oracle)\n")
+            lines.append("| engine | F1 | mean IoU | IoU≥0.5 | centroid err |")
+            lines.append("|---|---:|---:|---:|---:|")
+            lines.append(
+                f"| spdf      | {pct(mean('f1','spdf_vs_pdftotext'))} | "
+                f"{mean('mean_iou','spdf_vs_pdftotext'):.3f} | "
+                f"{pct(mean('iou_ge_threshold_rate','spdf_vs_pdftotext'))} | "
+                f"{mean('mean_centroid_err_pt','spdf_vs_pdftotext'):.2f} pt |"
+            )
+            if any("lite_vs_pdftotext" in r for r in rows):
+                lines.append(
+                    f"| liteparse | {pct(mean('f1','lite_vs_pdftotext'))} | "
+                    f"{mean('mean_iou','lite_vs_pdftotext'):.3f} | "
+                    f"{pct(mean('iou_ge_threshold_rate','lite_vs_pdftotext'))} | "
+                    f"{mean('mean_centroid_err_pt','lite_vs_pdftotext'):.2f} pt |"
+                )
         return "\n".join(lines) + "\n"
 
     (RESULTS / "spatial.md").write_text(emit_md())

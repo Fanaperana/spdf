@@ -14,19 +14,6 @@
         "mean_centroid_err_pt": 4.495218783697737,
         "iou_ge_threshold_rate": 0.9764150943396226,
         "iou_threshold": 0.5
-      },
-      "lite": {
-        "truth_words": 236,
-        "engine_words": 147,
-        "matches": 109,
-        "precision": 0.7414965986394558,
-        "recall": 0.461864406779661,
-        "f1": 0.5691906005221933,
-        "mean_iou": 0.6666904419476668,
-        "median_iou": 0.844155844155832,
-        "mean_centroid_err_pt": 28.02656297032551,
-        "iou_ge_threshold_rate": 0.6788990825688074,
-        "iou_threshold": 0.5
       }
     },
     {
@@ -44,17 +31,17 @@
         "iou_ge_threshold_rate": 1.0,
         "iou_threshold": 0.5
       },
-      "lite": {
-        "truth_words": 10,
+      "spdf_vs_pdftotext": {
+        "truth_words": 5,
         "engine_words": 6,
-        "matches": 4,
-        "precision": 0.6666666666666666,
-        "recall": 0.4,
-        "f1": 0.5,
-        "mean_iou": 0.9570249418400276,
-        "median_iou": 0.9569494412141415,
-        "mean_centroid_err_pt": 0.5366563145999508,
-        "iou_ge_threshold_rate": 1.0,
+        "matches": 3,
+        "precision": 0.5,
+        "recall": 0.6,
+        "f1": 0.5454545454545454,
+        "mean_iou": 0.0,
+        "median_iou": 0.0,
+        "mean_centroid_err_pt": 337.2645149500876,
+        "iou_ge_threshold_rate": 0.0,
         "iou_threshold": 0.5
       }
     },
@@ -73,17 +60,17 @@
         "iou_ge_threshold_rate": 0.5565217391304348,
         "iou_threshold": 0.5
       },
-      "lite": {
-        "truth_words": 710,
-        "engine_words": 281,
-        "matches": 84,
-        "precision": 0.298932384341637,
-        "recall": 0.11830985915492957,
-        "f1": 0.1695257315842583,
-        "mean_iou": 0.3514068762607198,
-        "median_iou": 0.5524688687039141,
-        "mean_centroid_err_pt": 135.73296957764342,
-        "iou_ge_threshold_rate": 0.5238095238095238,
+      "spdf_vs_pdftotext": {
+        "truth_words": 845,
+        "engine_words": 773,
+        "matches": 177,
+        "precision": 0.22897800776196636,
+        "recall": 0.20946745562130178,
+        "f1": 0.21878862793572312,
+        "mean_iou": 0.39724887896865363,
+        "median_iou": 0.553281910062387,
+        "mean_centroid_err_pt": 80.48990755038538,
+        "iou_ge_threshold_rate": 0.5988700564971752,
         "iou_threshold": 0.5
       }
     },
@@ -102,17 +89,17 @@
         "iou_ge_threshold_rate": 0.5862068965517241,
         "iou_threshold": 0.5
       },
-      "lite": {
-        "truth_words": 895,
+      "spdf_vs_pdftotext": {
+        "truth_words": 914,
         "engine_words": 133,
-        "matches": 28,
-        "precision": 0.21052631578947367,
-        "recall": 0.03128491620111732,
-        "f1": 0.05447470817120623,
-        "mean_iou": 0.3480091281196923,
-        "median_iou": 0.546699019982684,
-        "mean_centroid_err_pt": 175.60618410997077,
-        "iou_ge_threshold_rate": 0.5357142857142857,
+        "matches": 29,
+        "precision": 0.21804511278195488,
+        "recall": 0.03172866520787746,
+        "f1": 0.055396370582617,
+        "mean_iou": 0.5565871260823401,
+        "median_iou": 0.7235841880795287,
+        "mean_centroid_err_pt": 101.50222173189373,
+        "iou_ge_threshold_rate": 0.6896551724137931,
         "iou_threshold": 0.5
       }
     },
@@ -131,16 +118,16 @@
         "iou_ge_threshold_rate": 1.0,
         "iou_threshold": 0.5
       },
-      "lite": {
-        "truth_words": 38,
-        "engine_words": 7,
-        "matches": 1,
-        "precision": 0.14285714285714285,
-        "recall": 0.02631578947368421,
-        "f1": 0.044444444444444446,
-        "mean_iou": 0.6340312077872252,
-        "median_iou": 0.6340312077872252,
-        "mean_centroid_err_pt": 2.008985059002308,
+      "spdf_vs_pdftotext": {
+        "truth_words": 27,
+        "engine_words": 14,
+        "matches": 3,
+        "precision": 0.21428571428571427,
+        "recall": 0.1111111111111111,
+        "f1": 0.14634146341463417,
+        "mean_iou": 0.8337855097060877,
+        "median_iou": 0.785891338968461,
+        "mean_centroid_err_pt": 1.6294055251456434,
         "iou_ge_threshold_rate": 1.0,
         "iou_threshold": 0.5
       }
@@ -160,17 +147,17 @@
         "iou_ge_threshold_rate": 0.7857142857142857,
         "iou_threshold": 0.5
       },
-      "lite": {
-        "truth_words": 154,
-        "engine_words": 56,
-        "matches": 20,
-        "precision": 0.35714285714285715,
-        "recall": 0.12987012987012986,
-        "f1": 0.19047619047619047,
-        "mean_iou": 0.4708585389888109,
-        "median_iou": 0.6218148859039614,
-        "mean_centroid_err_pt": 103.50359335970761,
-        "iou_ge_threshold_rate": 0.65,
+      "spdf_vs_pdftotext": {
+        "truth_words": 144,
+        "engine_words": 72,
+        "matches": 14,
+        "precision": 0.19444444444444445,
+        "recall": 0.09722222222222222,
+        "f1": 0.12962962962962962,
+        "mean_iou": 0.6614584773069297,
+        "median_iou": 0.7949886682209768,
+        "mean_centroid_err_pt": 83.81833480714612,
+        "iou_ge_threshold_rate": 0.7857142857142857,
         "iou_threshold": 0.5
       }
     },
@@ -189,17 +176,17 @@
         "iou_ge_threshold_rate": 1.0,
         "iou_threshold": 0.5
       },
-      "lite": {
-        "truth_words": 181,
-        "engine_words": 36,
-        "matches": 4,
-        "precision": 0.1111111111111111,
-        "recall": 0.022099447513812154,
-        "f1": 0.03686635944700461,
-        "mean_iou": 0.4270673218839643,
-        "median_iou": 0.5484408398320364,
-        "mean_centroid_err_pt": 171.01734921548226,
-        "iou_ge_threshold_rate": 0.5,
+      "spdf_vs_pdftotext": {
+        "truth_words": 182,
+        "engine_words": 26,
+        "matches": 2,
+        "precision": 0.07692307692307693,
+        "recall": 0.01098901098901099,
+        "f1": 0.019230769230769232,
+        "mean_iou": 0.8464841995068282,
+        "median_iou": 0.8464841995068282,
+        "mean_centroid_err_pt": 5.477858162949489,
+        "iou_ge_threshold_rate": 1.0,
         "iou_threshold": 0.5
       }
     },
@@ -218,8 +205,8 @@
         "iou_ge_threshold_rate": 0.0,
         "iou_threshold": 0.5
       },
-      "lite": {
-        "truth_words": 3,
+      "spdf_vs_pdftotext": {
+        "truth_words": 4,
         "engine_words": 4,
         "matches": 0,
         "precision": 0.0,
