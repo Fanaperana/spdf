@@ -40,10 +40,8 @@ All notable changes to `spdf` land here. We follow
 
 ## [0.1.0] — initial alpha
 
-Initial public alpha of the Rust port of LiteParse. Feature-complete
-against the TypeScript original's `gridProjection` algorithm, with
-bundled pdfium, optional Tesseract OCR, CLI + FFI crates, and a parity
-harness.
+Initial public alpha. Column-aware grid projection, bundled pdfium,
+optional Tesseract OCR, CLI + FFI crates, and a parity harness.
 
 ---
 

@@ -1,4 +1,4 @@
-//! Port of `liteparse/src/processing/bbox.ts` (`buildBoundingBoxes`).
+//! Merge per-glyph text items into per-word bounding boxes.
 
 use spdf_types::{BoundingBox, TextItem};
 

@@ -1,5 +1,39 @@
 # spdf — Agent Guide
 
+Independent Rust PDF parser. Inspired algorithmically by
+[LiteParse](https://github.com/run-llama/liteparse) (TypeScript), but not
+a port of it: spdf has its own engine stack, data model, and hardening
+work. This doc is the single source of truth for where things live.
+Keep it short; expand per-crate READMEs for the gory details.
+
+## Crates
+
+| Crate | Purpose |
+| --- | --- |
+| `spdf-types` | Public schema: `TextItem`, `ParsedPage`, `ParseResult`, `ParseConfig`. No heavy deps. |
+| `spdf-processing` | Pure text/geometry helpers: bbox, clean, markup, search, ocr-utils. |
+| `spdf-projection` | Spatial grid reconstruction (the crown jewel). |
+| `spdf-pdf` | `PdfEngine` trait + PDFium implementation (text + render + images). |
+| `spdf-ocr` | `OcrEngine` trait + HTTP + Tesseract implementations. |
+| `spdf-convert` | Shell out to LibreOffice / ImageMagick for non-PDF inputs. |
+| `spdf-output` | JSON + text formatters. |
+| `spdf-core` | `SpdfParser` orchestrator: load → extract → OCR → project → format. |
+| `spdf-cli` | `spdf` binary (clap). Installed as `spdf` and `lit`. |
+| `spdf-node` | napi-rs bindings (excluded from default workspace builds). |
+| `xtask` | Bench harness, pdfium downloader. |
+
+## Key Invariants
+
+- Coordinates use PDF points, top-left origin.
+- All numeric work uses `f64`.
+- Iteration order of "JS-object-keyed" structures is preserved via
+  `IndexMap` to keep the projection algorithm deterministic.
+- Public JSON output: `serde(rename_all = "camelCase")` +
+  `preserve_order` serializer + `skip_serializing_if = Option::is_none`.
+- Benchmark target: `benchmark/` drives a head-to-head against
+  LiteParse and raw tesseract on the corpus in `example/`.
+# spdf — Agent Guide
+
 Rust rewrite of `liteparse/` (TypeScript). This doc is the single source of
 truth for where things live and how they relate. Keep it short; expand per-crate
 READMEs for the gory details.

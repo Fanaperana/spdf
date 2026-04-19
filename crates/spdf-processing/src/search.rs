@@ -1,4 +1,4 @@
-//! Port of `liteparse/src/processing/searchItems.ts`.
+//! Search helpers for extracted text items.
 
 use spdf_types::JsonTextItem;
 

@@ -50,12 +50,29 @@ rayon = "1.10"
 bytes = "1"
 infer = "0.16"
 tempfile = "3"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-reqwest = { version = "0.12", default-features = false, features = ["multipart", "json", "rustls-tls"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "process", "io-util"] }
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "multipart",
+    "json",
+    "rustls-tls",
+] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "fs",
+    "process",
+    "io-util",
+] }
 clap = { version = "4", features = ["derive"] }
 insta = { version = "1", features = ["json"] }
-pdfium-render = { version = "0.9", default-features = false, features = ["thread_safe", "image_latest", "pdfium_latest"] }
+pdfium-render = { version = "0.9", default-features = false, features = [
+    "thread_safe",
+    "image_latest",
+    "pdfium_latest",
+] }
 tesseract = "0.15"
 num_cpus = "1"
 
@@ -67,4 +84,3 @@ strip = "symbols"
 
 [profile.dev]
 debug = 1
-

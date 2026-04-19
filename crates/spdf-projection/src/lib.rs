@@ -1,8 +1,7 @@
 //! Spatial text reconstruction.
 //!
-//! Reconstructs readable text from PDFium's raw glyph-level extraction,
-//! approximating the column-aware layout that `liteparse`'s
-//! `src/processing/gridProjection.ts` produces from PDF.js word-level runs.
+//! Reconstructs readable text from PDFium's raw glyph-level extraction
+//! using a column-aware grid projection.
 //!
 //! ## Pipeline
 //!
@@ -10,16 +9,16 @@
 //! 2. **Dedup faux-bold shadow glyphs** — PDFs often draw text twice at a
 //!    slight offset to simulate bold. PDFium surfaces both copies. We detect
 //!    and drop the shadow by looking for overlapping boxes with identical
-//!    text (liteparse/gridProjection.ts: "same text rendered twice").
+//!    text.
 //! 3. **Merge continuous glyphs.** Adjacent items on the same baseline with
-//!    touching or sub-pixel-overlapping boxes are concatenated (port of
-//!    liteparse `canMerge`: y/h equal and xDelta ∈ [-1.0, 0.1]). This folds
-//!    per-character PDFium runs back into words.
+//!    touching or sub-pixel-overlapping boxes are concatenated (same y/h,
+//!    xDelta ∈ [-1.0, 0.1]). This folds per-character PDFium runs back into
+//!    words.
 //! 4. **Group into rows** using a baseline-band clustering anchored to the
 //!    page's median glyph height. Tall decorative items (vertical bars,
 //!    rules) cannot stretch a row.
 //! 5. **Merge rows vertically** if their x-ranges are disjoint and their
-//!    y-extents overlap (liteparse final-pass line merger).
+//!    y-extents overlap.
 //! 6. **Render each row** onto a character grid anchored at the page's left
 //!    edge. Gaps are classified: very-wide → column padding; narrow → space;
 //!    tight kerning → concatenate.
@@ -105,15 +104,14 @@ pub fn project_page(page: PageInput, debug: bool, preserve_small: bool) -> Parse
     // same-row items when the gap is tight. This is the critical pre-step
     // for the small-text filter: it lets decimal points, commas, and other
     // tiny-glyph punctuation fuse with their neighbouring digits so the row
-    // is no longer dominated by small text (port of liteparse's per-line
-    // word-merge, which runs before `filterUnprojectableText`).
+    // is no longer dominated by small text. Runs before the dominant
+    // small-text filter below.
     absorb_small_glyphs(&mut rows, &mut text_items);
 
     // Filter out rows that are dominated by very-small glyphs. These are
     // typically QR codes, barcodes, or rasterised microprint encoded into
     // the text layer as hundreds of tiny numeric runs. Keeping them
-    // destroys column alignment on surrounding real content. Port of
-    // liteparse `isSmallTextLine` / `filterUnprojectableText`. Items are
+    // destroys column alignment on surrounding real content. Items are
     // retained in `text_items` so downstream JSON consumers can still see
     // them — only the rendered text drops them.
     if !preserve_small {
@@ -159,7 +157,7 @@ pub fn project_page(page: PageInput, debug: bool, preserve_small: bool) -> Parse
 /// share any x-overlap and nearly-same midline. The survivor's bounds are
 /// extended to the union of both copies so the downstream gap calculation
 /// doesn't produce artificial whitespace between the survivor and the next
-/// glyph (port of liteparse's `mergePageBbox`).
+/// glyph.
 fn deduplicate_shadows(items: &mut Vec<TextItem>) {
     let n = items.len();
     let mut keep = vec![true; n];
@@ -226,13 +224,13 @@ fn deduplicate_shadows(items: &mut Vec<TextItem>) {
 }
 
 // ---------------------------------------------------------------------------
-// Continuous-run merge (liteparse `canMerge`)
+// Continuous-run merge
 // ---------------------------------------------------------------------------
 
 /// Merge adjacent items that share a baseline and touch horizontally. This
 /// fuses per-glyph extraction into word-level runs.
 ///
-/// Liteparse's rule: same y, same h, `xDelta ∈ [-1.0, 0.1]`. We relax slightly
+/// Merge rule: same y, same h, `xDelta ∈ [-1.0, 0.1]`. We relax slightly
 /// because PDFium reports y/h with sub-pixel jitter.
 fn merge_continuous_runs(items: &mut Vec<TextItem>) {
     if items.len() < 2 {
@@ -328,8 +326,8 @@ fn cluster_rows(items: &[TextItem], median_h: f64) -> Vec<Row> {
 }
 
 /// Merge consecutive rows whose y-ranges overlap AND whose x-footprints are
-/// disjoint. This is liteparse's final-pass line merge for cases where a
-/// split-baseline row was prematurely broken apart.
+/// disjoint. Final-pass line merge for cases where a split-baseline row was
+/// prematurely broken apart.
 fn merge_overlapping_rows(mut rows: Vec<Row>, items: &[TextItem]) -> Vec<Row> {
     let mut i = 1;
     while i < rows.len() {
@@ -384,14 +382,14 @@ fn rows_x_collide(a: &Row, b: &Row, items: &[TextItem]) -> bool {
 // Small-text filter (QR / barcode / microprint)
 // ---------------------------------------------------------------------------
 
-/// Liteparse constant: glyphs shorter than this are considered "very small
-/// text". 2pt @ 72 DPI → ~8px @ 300 DPI, the practical floor for readable
-/// text. Anything smaller is almost always QR / barcode / microprint.
+/// Glyphs shorter than this are considered "very small text". 2pt @ 72 DPI
+/// → ~8px @ 300 DPI, the practical floor for readable text. Anything
+/// smaller is almost always QR / barcode / microprint.
 const SMALL_FONT_SIZE_THRESHOLD: f64 = 2.0;
 
 /// Drop rows where more than 50% of the items are below the small-font
-/// threshold (port of liteparse `isSmallTextLine`). Also drops items within
-/// a mixed row that fall below the threshold to keep the surviving row clean.
+/// threshold. Also drops items within a mixed row that fall below the
+/// threshold to keep the surviving row clean.
 fn filter_small_text_rows(rows: Vec<Row>, items: &[TextItem]) -> Vec<Row> {
     let mut out: Vec<Row> = Vec::with_capacity(rows.len());
     for row in rows {

@@ -1,4 +1,4 @@
-//! Port of `liteparse/src/processing/textUtils.ts`.
+//! Text normalisation and cleanup helpers.
 
 /// Clean common OCR artifacts from table documents. OCR often misreads
 /// vertical table borders as bracket/pipe characters at the start or end of

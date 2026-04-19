@@ -262,15 +262,20 @@ See [AGENTS.md](AGENTS.md) for the full crate map and
 
 - Node bindings (`@spdf/node`) on top of `spdf-ffi`
 - Python bindings via PyO3
-- `spdf serve` — a local HTTP service compatible with the liteparse API
+- `spdf serve` — a local HTTP parsing service
 - Optional ML-based reading-order classifier (opt-in, `burn` feature flag)
 
 ## Acknowledgements
 
-The spatial projection algorithm is inspired by and benchmarked against
-[LiteParse](https://github.com/run-llama/liteparse) by the LlamaIndex team.
-Rendering is powered by [PDFium](https://pdfium.googlesource.com/pdfium/).
-OCR uses [Tesseract](https://github.com/tesseract-ocr/tesseract).
+spdf is an independent Rust project authored by
+[Fanaperana](https://github.com/Fanaperana). The spatial projection
+algorithm was inspired by (and is benchmarked against)
+[LiteParse](https://github.com/run-llama/liteparse), but spdf is not a
+port or rewrite — it's its own implementation, with its own engine
+choices (PDFium + Tesseract), its own data model, and its own hardening
+work. Rendering is powered by
+[PDFium](https://pdfium.googlesource.com/pdfium/); OCR uses
+[Tesseract](https://github.com/tesseract-ocr/tesseract).
 
 ## License
 

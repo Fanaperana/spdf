@@ -14,11 +14,7 @@ use spdf_types::{Language, ParseInput};
 use tracing_subscriber::{EnvFilter, fmt};
 
 #[derive(Debug, Parser)]
-#[command(
-    name = "spdf",
-    version,
-    about = "Fast PDF parsing and OCR (Rust rewrite of liteparse)"
-)]
+#[command(name = "spdf", version, about = "Fast PDF parsing and OCR")]
 struct Cli {
     /// Suppress progress output on stderr.
     #[arg(short = 'q', long, global = true)]

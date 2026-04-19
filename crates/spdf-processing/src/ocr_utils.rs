@@ -1,4 +1,4 @@
-//! Port of `liteparse/src/processing/ocrUtils.ts`.
+//! Heuristics for deciding when OCR needs to run.
 //!
 //! Turns raw OCR detections into [`TextItem`]s with PDF-space coordinates and
 //! filters out detections that duplicate native text or fall below a

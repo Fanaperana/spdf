@@ -1,4 +1,4 @@
-//! Port of `liteparse/src/processing/markupUtils.ts`.
+//! Markup annotation (highlight / underline / strikeout) handling.
 
 use spdf_types::MarkupData;
 
