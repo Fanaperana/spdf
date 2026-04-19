@@ -1,4 +1,5 @@
 target/
-corpus/
+corpus/*/
+!corpus/*/.keep
 artifacts/
 coverage/

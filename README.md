@@ -197,6 +197,26 @@ Or download a prebuilt binary from
 [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries/releases)
 and point `PDFIUM_LIB_PATH` at it.
 
+### Platform support matrix
+
+| Platform | Core parsing | OCR (Tesseract) | Notes |
+| --- | :---: | :---: | --- |
+| Linux x86_64 | ✅ | ✅ | primary development target |
+| macOS (Intel + Apple Silicon) | ✅ | ✅ | requires `brew install tesseract` |
+| Windows x86_64 | ✅ | ⚠️ source-build only | see below |
+
+**Windows OCR caveat.** The `tesseract` Rust crate used by `spdf-ocr`
+links against `libtesseract` + `libleptonica` via `bindgen`, which needs
+a working C toolchain (clang) and a `vcpkg` or manually-installed
+Tesseract/Leptonica. The CI matrix builds spdf on Windows **without**
+the `tesseract` feature; the Linux/macOS jobs cover OCR. If you need
+Windows OCR in production today, install Tesseract via `vcpkg install
+tesseract leptonica --triplet x64-windows`, set `LIBCLANG_PATH`, and
+build with `cargo build --release -p spdf-cli --features
+spdf-cli/tesseract`. The [HTTP OCR backend](#cli) (`--ocr-server-url`)
+works on every platform and is the recommended option for Windows until
+we cut a proper MSVC-native build.
+
 ## Quick start
 
 ```sh

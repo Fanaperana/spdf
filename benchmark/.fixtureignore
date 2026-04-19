@@ -1,1 +1,7 @@
 avil.pdf
+# Adversarial / non-English fixtures: these exist to exercise the code
+# paths but aren't meaningful to compare against raw-tesseract-English
+# ground truth.
+encrypted.pdf
+malformed.pdf
+cjk-unicode-p1-2.pdf

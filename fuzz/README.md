@@ -24,14 +24,18 @@ Any panic / timeout / out-of-memory counts as a finding.
 
 ## Corpus
 
-Seed the corpus with the committed public-domain PDFs — they make a
-good starting point for coverage-guided mutation:
+A seed corpus directory is tracked at `fuzz/corpus/parse_pdf/` (via a
+`.keep` sentinel). Populate it with real PDFs before the first run so
+libFuzzer has useful structural material to mutate:
 
 ```sh
-mkdir -p corpus/parse_pdf
-cp ../example/*.pdf ../example/corpus/*.pdf corpus/parse_pdf/
-cargo +nightly fuzz run parse_pdf corpus/parse_pdf -- -max_total_time=600
+cp ../example/*.pdf ../example/corpus/*.pdf fuzz/corpus/parse_pdf/
+cargo +nightly fuzz run parse_pdf fuzz/corpus/parse_pdf -- -max_total_time=600
 ```
+
+Recommended runtime budget before each release: **at least 1 CPU-hour**
+(`-max_total_time=3600`). For 1.0 release, do a full 24 CPU-hour run
+(`-max_total_time=86400`). Track the latest budget in the release notes.
 
 ## Triaging findings
 
