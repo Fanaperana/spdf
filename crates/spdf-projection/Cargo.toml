@@ -6,6 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 description = "Spatial grid projection — the algorithmic core of spdf."
 
 [dependencies]

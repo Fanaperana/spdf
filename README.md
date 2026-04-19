@@ -188,6 +188,39 @@ full hardening checklist in [SECURITY.md](SECURITY.md).
 
 ## Install
 
+### Prebuilt binaries
+
+Self-contained tarballs (bundled `libpdfium`, no runtime deps) are
+attached to each [GitHub release](https://github.com/Fanaperana/spdf/releases).
+Download, extract, and run. OCR is not compiled into the prebuilt
+binaries — use `--ocr-server-url` for HTTP OCR or `cargo install`
+with `--features spdf-cli/tesseract` for a local Tesseract build.
+
+| Target | Tarball | Status |
+| --- | --- | :---: |
+| `x86_64-unknown-linux-gnu` | `spdf-<version>-x86_64-unknown-linux-gnu.tar.gz` | ✅ attached to v0.2.0-alpha.1 |
+| `aarch64-unknown-linux-gnu` | `spdf-<version>-aarch64-unknown-linux-gnu.tar.gz` | ⬜ TODO |
+| `x86_64-apple-darwin` | `spdf-<version>-x86_64-apple-darwin.tar.gz` | ⬜ TODO — build on macOS Intel |
+| `aarch64-apple-darwin` | `spdf-<version>-aarch64-apple-darwin.tar.gz` | ⬜ TODO — build on Apple Silicon |
+| `x86_64-pc-windows-msvc` | `spdf-<version>-x86_64-pc-windows-msvc.zip` | ⬜ TODO — build on Windows |
+
+To produce a release tarball on a new host:
+
+```sh
+cargo build --release -p spdf-cli
+VER=0.2.0-alpha.1
+TARGET=$(rustc -vV | awk '/^host:/ {print $2}')
+DIR="spdf-${VER}-${TARGET}"
+mkdir -p "dist/${DIR}"
+cp target/release/spdf "dist/${DIR}/"          # use spdf.exe on Windows
+cp LICENSE README.md CHANGELOG.md "dist/${DIR}/"
+tar czf "dist/${DIR}.tar.gz" -C dist "${DIR}"   # or zip on Windows
+sha256sum "dist/${DIR}.tar.gz" > "dist/${DIR}.tar.gz.sha256"
+gh release upload v${VER} "dist/${DIR}.tar.gz" "dist/${DIR}.tar.gz.sha256"
+```
+
+### From source
+
 ```sh
 # from source (requires Rust 1.85+)
 cargo install --path crates/spdf-cli

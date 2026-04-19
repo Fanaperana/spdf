@@ -25,6 +25,11 @@ edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
 repository = "https://github.com/Fanaperana/spdf"
+homepage = "https://github.com/Fanaperana/spdf"
+documentation = "https://docs.rs/spdf-core"
+readme = "README.md"
+keywords = ["pdf", "ocr", "parsing", "text-extraction", "tesseract"]
+categories = ["text-processing", "parser-implementations", "command-line-utilities"]
 authors = ["spdf contributors"]
 
 [workspace.dependencies]

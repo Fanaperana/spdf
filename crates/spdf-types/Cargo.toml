@@ -6,6 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 description = "Core types for the spdf workspace: TextItem, ParsedPage, ParseResult, ParseConfig."
 
 [dependencies]

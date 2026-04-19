@@ -9,3 +9,4 @@ example/avil.pdf
 # Tesseract language models that accidentally land in the worktree when
 # libtesseract downloads them.
 *.traineddata
+dist/
