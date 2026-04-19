@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use spdf_core::{OutputFormat, SpdfParser};
-use spdf_types::ParseInput;
-use tracing_subscriber::{fmt, EnvFilter};
+use spdf_types::{Language, ParseInput};
+use tracing_subscriber::{EnvFilter, fmt};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -62,6 +62,16 @@ struct ParseArgs {
     /// HTTP OCR server URL (matches `--ocr-server-url` in liteparse).
     #[arg(long)]
     ocr_server_url: Option<String>,
+
+    /// OCR language code(s). Pass multiple times or comma-separate for
+    /// multi-language Tesseract (e.g. `--ocr-language eng --ocr-language fra`
+    /// or `--ocr-language eng,fra`). Defaults to `en`.
+    #[arg(long = "ocr-language", value_delimiter = ',')]
+    ocr_language: Vec<String>,
+
+    /// Path to a tessdata directory (Tesseract language data).
+    #[arg(long)]
+    tessdata_path: Option<PathBuf>,
 
     /// Max pages to process.
     #[arg(long, default_value_t = 10_000)]
@@ -121,6 +131,14 @@ struct BatchArgs {
     #[arg(long)]
     ocr_server_url: Option<String>,
 
+    /// OCR language code(s). Repeat or comma-separate for multi-language.
+    #[arg(long = "ocr-language", value_delimiter = ',')]
+    ocr_language: Vec<String>,
+
+    /// Path to a tessdata directory.
+    #[arg(long)]
+    tessdata_path: Option<PathBuf>,
+
     #[arg(long, default_value_t = 10_000)]
     max_pages: u32,
 
@@ -150,7 +168,7 @@ impl From<CliFormat> for OutputFormat {
     }
 }
 
-fn main() -> Result<()> {
+fn main() {
     let cli = Cli::parse();
     // `-v` levels override RUST_LOG; otherwise respect the env.
     let filter = match cli.verbose {
@@ -161,12 +179,48 @@ fn main() -> Result<()> {
     };
     fmt().with_env_filter(filter).with_writer(io::stderr).init();
 
-    match cli.command {
+    let result = match cli.command {
         Commands::Parse(args) => run_parse(args, cli.quiet),
         Commands::Screenshot(args) => run_screenshot(args, cli.quiet),
         Commands::BatchParse(args) => run_batch(args, cli.quiet),
+    };
+
+    // Print any error ourselves so it reaches the user BEFORE we redirect
+    // stderr below. If we returned `Result` from main, the Rust runtime would
+    // print after we've already muted stderr.
+    let exit_code = match &result {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("Error: {e:#}");
+            1
+        }
+    };
+
+    // Suppress libtesseract's `ObjectCache(...)~ObjectCache(): WARNING! LEAK!`
+    // messages that its C++ destructors print to stderr during process
+    // teardown. Our tracing warnings have already been flushed.
+    suppress_late_stderr();
+
+    std::process::exit(exit_code);
+}
+
+#[cfg(unix)]
+fn suppress_late_stderr() {
+    use std::io::Write as _;
+    let _ = io::stderr().flush();
+    // Safety: we're about to exit; overwriting fd 2 only affects writes that
+    // happen after this point (i.e. C++ static destructors in libtesseract).
+    unsafe {
+        let devnull = libc::open(b"/dev/null\0".as_ptr() as *const _, libc::O_WRONLY);
+        if devnull >= 0 {
+            libc::dup2(devnull, 2);
+            libc::close(devnull);
+        }
     }
 }
+
+#[cfg(not(unix))]
+fn suppress_late_stderr() {}
 
 fn run_parse(args: ParseArgs, quiet: bool) -> Result<()> {
     let parser = SpdfParser::builder()
@@ -179,6 +233,12 @@ fn run_parse(args: ParseArgs, quiet: bool) -> Result<()> {
     cfg.target_pages = args.target_pages.clone();
     cfg.password = args.password.clone();
     cfg.ocr_server_url = args.ocr_server_url.clone();
+    if let Some(lang) = parse_language(&args.ocr_language) {
+        cfg.ocr_language = lang;
+    }
+    if let Some(p) = &args.tessdata_path {
+        cfg.tessdata_path = Some(p.to_string_lossy().into_owned());
+    }
     if args.trace_grid || args.visualize_grid.is_some() {
         let mut debug = spdf_types::DebugConfig::default();
         debug.enabled = true;
@@ -193,9 +253,7 @@ fn run_parse(args: ParseArgs, quiet: bool) -> Result<()> {
 
     let input: ParseInput = if args.file == "-" {
         let mut buf = Vec::new();
-        io::stdin()
-            .read_to_end(&mut buf)
-            .context("reading stdin")?;
+        io::stdin().read_to_end(&mut buf).context("reading stdin")?;
         if buf.is_empty() {
             anyhow::bail!("no data received from stdin");
         }
@@ -290,6 +348,12 @@ fn run_batch(args: BatchArgs, quiet: bool) -> Result<()> {
         cfg.max_pages = args.max_pages;
         cfg.dpi = args.dpi;
         cfg.password = args.password.clone();
+        if let Some(lang) = parse_language(&args.ocr_language) {
+            cfg.ocr_language = lang;
+        }
+        if let Some(p) = &args.tessdata_path {
+            cfg.tessdata_path = Some(p.to_string_lossy().into_owned());
+        }
 
         let parser = SpdfParser::new(cfg);
         match parser.parse(ParseInput::Path(file.clone())) {
@@ -303,4 +367,19 @@ fn run_batch(args: BatchArgs, quiet: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Build a `Language` from CLI values. Returns `None` when the user didn't
+/// pass `--ocr-language`, so the default is preserved.
+fn parse_language(values: &[String]) -> Option<Language> {
+    let cleaned: Vec<String> = values
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    match cleaned.len() {
+        0 => None,
+        1 => Some(Language::Single(cleaned.into_iter().next().unwrap())),
+        _ => Some(Language::Multiple(cleaned)),
+    }
 }
