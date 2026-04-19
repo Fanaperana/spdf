@@ -1,0 +1,107 @@
+name: Pages
+
+# Builds the static website in website/ and deploys to GitHub Pages.
+# Run on every push to main, on manual dispatch, and weekly so the
+# benchmark numbers stay reasonably fresh (re-runs on the hosted runner).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - "benchmark/**"
+      - "README.md"
+      - ".github/workflows/pages.yml"
+  schedule:
+    # Weekly rebuild — refreshes the benchmark table against the upstream
+    # liteparse main.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+# Needed by actions/deploy-pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- Optional benchmark refresh ------------------------------------
+      # Build spdf + liteparse, run benchmark/run.sh, and drop the
+      # resulting summary.json into website/. If anything in this block
+      # fails we still deploy the last-known-good benchmark.json already
+      # committed under website/.
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libtesseract-dev libleptonica-dev clang \
+            tesseract-ocr tesseract-ocr-eng \
+            poppler-utils
+        continue-on-error: true
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.85"
+        continue-on-error: true
+
+      - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+        continue-on-error: true
+
+      - name: Build spdf (with OCR)
+        id: build_spdf
+        run: |
+          make build-ocr
+          echo "$GITHUB_WORKSPACE/target/release" >> "$GITHUB_PATH"
+        continue-on-error: true
+
+      - name: Clone + build liteparse
+        id: build_lite
+        run: |
+          git clone --depth 1 https://github.com/run-llama/liteparse /tmp/liteparse
+          cd /tmp/liteparse
+          npm ci --prefer-offline --no-audit --no-fund
+          npm run build
+        continue-on-error: true
+
+      - name: Run benchmark
+        id: run_benchmark
+        if: steps.build_spdf.outcome == 'success'
+        run: |
+          LITEPARSE_DIR=/tmp/liteparse ./benchmark/run.sh
+          cp benchmark/results/summary.json website/benchmark.json
+          python3 benchmark/update_readme.py || true
+        continue-on-error: true
+
+      # --- Static site packaging -----------------------------------------
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: "website"
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

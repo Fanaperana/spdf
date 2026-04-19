@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>spdf — fast, spatial PDF parsing in Rust</title>
+  <meta name="description" content="spdf is a self-contained Rust CLI and library for extracting text from PDFs with preserved columns, tables, and layout — plus optional Tesseract OCR." />
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  <link rel="stylesheet" href="./styles.css" />
+  <meta property="og:title" content="spdf — fast, spatial PDF parsing in Rust" />
+  <meta property="og:description" content="Column-aware PDF text extraction, Tesseract OCR built-in, single static binary." />
+  <meta property="og:type" content="website" />
+</head>
+
+<body>
+  <header class="hero">
+    <nav class="nav">
+      <a class="brand" href="#top">
+        <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true">
+          <rect x="4" y="4" width="24" height="24" rx="6" fill="#ff7a00" />
+          <path d="M11 9h6a4 4 0 0 1 0 8h-3v6h-3V9zm3 3v2h3a1 1 0 0 0 0-2h-3z" fill="#0b0b0b" />
+        </svg>
+        <span>spdf</span>
+      </a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#benchmark">Benchmark</a>
+        <a href="#install">Install</a>
+        <a href="#quickstart">Quick start</a>
+        <a class="external" href="https://github.com/Fanaperana/spdf" rel="noopener">GitHub ↗</a>
+      </div>
+    </nav>
+
+    <div class="hero-inner" id="top">
+      <p class="eyebrow">Rust workspace · MIT license · macOS · Linux · Windows</p>
+      <h1>Fast, <em>spatial</em> PDF parsing in Rust.</h1>
+      <p class="tagline">
+        Extract text with columns, tables, and layout intact — plus Tesseract
+        OCR for scans and format conversion for Office docs. Ships as a
+        single self-contained binary (PDFium embedded).
+      </p>
+      <div class="cta">
+        <a class="btn primary" href="#install">Install</a>
+        <a class="btn" href="#benchmark">See the benchmark</a>
+        <a class="btn ghost" href="https://github.com/Fanaperana/spdf" rel="noopener">View on GitHub ↗</a>
+      </div>
+      <pre class="snippet" aria-label="install snippet"><code># Linux / macOS
+curl -fsSL https://github.com/Fanaperana/spdf/releases/latest/download/install.sh | sh
+
+# from source
+git clone https://github.com/Fanaperana/spdf &amp;&amp; cd spdf &amp;&amp; make install</code></pre>
+    </div>
+  </header>
+
+  <section id="features" class="wrap features">
+    <h2>Why spdf</h2>
+    <p class="lede">
+      Most PDF-to-text tools collapse whitespace, shuffle columns, and emit
+      one giant line-salad. <strong>spdf keeps the geometry.</strong>
+    </p>
+    <div class="grid">
+      <article>
+        <h3>Column-aware projection</h3>
+        <p>
+          Tables, two-column layouts, sidebars, and indented blocks come
+          back in reading order — not a flat string of tokens.
+        </p>
+      </article>
+      <article>
+        <h3>Faux-bold &amp; shadow dedup</h3>
+        <p>
+          PDFs that "draw text twice" to fake bold used to produce
+          <code>TaTax Infofo</code>. spdf outputs <code>Tax Info</code>.
+        </p>
+      </article>
+      <article>
+        <h3>Word reconstruction</h3>
+        <p>
+          Per-glyph extraction is stitched back into words
+          (<code>1 8 3 6</code> → <code>1836</code>) with a liteparse-compatible
+          merge heuristic.
+        </p>
+      </article>
+      <article>
+        <h3>QR / microprint filter</h3>
+        <p>
+          The hundreds of tiny numeric glyphs that encode a QR code are
+          auto-dropped so they don't destroy the surrounding table.
+        </p>
+      </article>
+      <article>
+        <h3>Tesseract OCR, built in</h3>
+        <p>
+          Per-word bboxes, thread-local engine cache for speed, parallel
+          pages via <code>rayon</code>. Or plug any HTTP OCR server.
+        </p>
+      </article>
+      <article>
+        <h3>One static binary</h3>
+        <p>
+          PDFium is embedded at build time (~7.5 MB) and extracted to a
+          user cache on first run. No runtime setup.
+        </p>
+      </article>
+    </div>
+  </section>
+
+  <section id="benchmark" class="wrap benchmark">
+    <h2>Benchmark</h2>
+    <p class="lede">
+      Head-to-head against
+      <a href="https://github.com/run-llama/liteparse" rel="noopener">LiteParse</a>,
+      the TypeScript project spdf is a port of. Ground truth:
+      <code>tesseract &lt;image&gt; - -l eng</code>, with PDFs rendered via
+      <code>pdftoppm -r 150</code>. Tokens compared as a case-insensitive multiset.
+    </p>
+
+    <div id="benchmark-block" aria-busy="true">
+      <p class="muted">Loading latest benchmark results…</p>
+    </div>
+
+    <p class="muted">
+      Raw outputs are committed under
+      <a href="https://github.com/Fanaperana/spdf/tree/main/benchmark/outputs" rel="noopener"><code>benchmark/outputs/</code></a>. Reproduce locally with
+      <code>LITEPARSE_DIR=/path/to/liteparse ./benchmark/run.sh</code>.
+    </p>
+  </section>
+
+  <section id="install" class="wrap install">
+    <h2>Install</h2>
+    <div class="grid two">
+      <article>
+        <h3>From source</h3>
+        <pre><code>git clone https://github.com/Fanaperana/spdf
+cd spdf
+make install       # release build + copy to ~/.local/bin</code></pre>
+      </article>
+      <article>
+        <h3>With OCR</h3>
+        <pre><code># Debian / Ubuntu
+sudo apt-get install -y libtesseract-dev libleptonica-dev \
+                        clang tesseract-ocr tesseract-ocr-eng
+make install-ocr</code></pre>
+      </article>
+    </div>
+  </section>
+
+  <section id="quickstart" class="wrap quickstart">
+    <h2>Quick start</h2>
+    <pre><code># Plain text with preserved layout
+spdf parse invoice.pdf --no-ocr --format text
+
+# Structured JSON with per-glyph bounding boxes
+spdf parse invoice.pdf --format json &gt; out.json
+
+# OCR a scanned PDF (uses embedded Tesseract)
+spdf parse scan.pdf --ocr-language eng
+
+# Use an external OCR server instead
+spdf parse scan.pdf --ocr-server-url http://localhost:8000
+
+# Batch convert a directory
+spdf batch-parse ./inputs ./outputs --format text</code></pre>
+  </section>
+
+  <footer>
+    <div class="wrap">
+      <p>
+        <a href="https://github.com/Fanaperana/spdf" rel="noopener">GitHub</a>
+        ·
+        <a href="https://github.com/Fanaperana/spdf/blob/main/LICENSE" rel="noopener">MIT License</a>
+        · built with Rust
+      </p>
+    </div>
+  </footer>
+
+  <script src="./benchmark.js" defer></script>
+</body>
+
+</html>
