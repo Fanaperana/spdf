@@ -1,0 +1,62 @@
+{
+  "rows": [
+    {
+      "fixture": "example-1.jpg",
+      "spdf": {
+        "truth_words": 236,
+        "engine_words": 232,
+        "matches": 212,
+        "precision": 0.9137931034482759,
+        "recall": 0.8983050847457628,
+        "f1": 0.9059829059829059,
+        "mean_iou": 0.9756656184486359,
+        "median_iou": 0.9999999999999971,
+        "mean_centroid_err_pt": 4.495218783697737,
+        "iou_ge_threshold_rate": 0.9764150943396226,
+        "iou_threshold": 0.5
+      },
+      "lite": {
+        "truth_words": 236,
+        "engine_words": 147,
+        "matches": 109,
+        "precision": 0.7414965986394558,
+        "recall": 0.461864406779661,
+        "f1": 0.5691906005221933,
+        "mean_iou": 0.6666904419476668,
+        "median_iou": 0.844155844155832,
+        "mean_centroid_err_pt": 28.02656297032551,
+        "iou_ge_threshold_rate": 0.6788990825688074,
+        "iou_threshold": 0.5
+      }
+    },
+    {
+      "fixture": "test-ocr.pdf",
+      "spdf": {
+        "truth_words": 10,
+        "engine_words": 6,
+        "matches": 5,
+        "precision": 0.8333333333333334,
+        "recall": 0.5,
+        "f1": 0.625,
+        "mean_iou": 0.9521992053038771,
+        "median_iou": 0.9529837251356238,
+        "mean_centroid_err_pt": 0.6439875775199371,
+        "iou_ge_threshold_rate": 1.0,
+        "iou_threshold": 0.5
+      },
+      "lite": {
+        "truth_words": 10,
+        "engine_words": 6,
+        "matches": 4,
+        "precision": 0.6666666666666666,
+        "recall": 0.4,
+        "f1": 0.5,
+        "mean_iou": 0.9570249418400276,
+        "median_iou": 0.9569494412141415,
+        "mean_centroid_err_pt": 0.5366563145999508,
+        "iou_ge_threshold_rate": 1.0,
+        "iou_threshold": 0.5
+      }
+    }
+  ]
+}

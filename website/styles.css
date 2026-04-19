@@ -281,6 +281,13 @@ section {
   font-size: 0.9rem;
 }
 
+.sub {
+  margin-top: 40px;
+  margin-bottom: 8px;
+  font-size: 1.2rem;
+  color: var(--fg);
+}
+
 footer {
   padding: 32px 0 48px;
   color: var(--fg-dim);

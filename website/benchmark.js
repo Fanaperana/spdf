@@ -1,38 +1,28 @@
-// Render the benchmark table from ./benchmark.json (copied into /website at
-// build time by .github/workflows/pages.yml).
-(async () => {
-  const host = document.getElementById("benchmark-block");
-  if (!host) return;
+// Render the accuracy and spatial benchmark tables. Source data is
+// copied into /website at build time by .github/workflows/pages.yml.
 
-  let data;
-  try {
-    const resp = await fetch("./benchmark.json", { cache: "no-store" });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    data = await resp.json();
-  } catch (err) {
-    host.innerHTML = `<p class="muted">Benchmark results unavailable: ${err.message}. Run <code>./benchmark/run.sh</code> locally to reproduce.</p>`;
-    host.removeAttribute("aria-busy");
-    return;
-  }
+const pct = (x) => `${(x * 100).toFixed(1)}%`;
+const ms = (x) => `${x} ms`;
 
-  const rows = data.rows || [];
-  if (rows.length === 0) {
-    host.innerHTML = `<p class="muted">No benchmark rows available.</p>`;
-    host.removeAttribute("aria-busy");
-    return;
-  }
+function mean(rows, pick, key) {
+  const vals = rows
+    .map((r) => pick(r))
+    .filter(Boolean)
+    .map((e) => e[key]);
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+}
 
-  const pct = (x) => `${(x * 100).toFixed(1)}%`;
-  const ms = (x) => `${x} ms`;
+async function loadJSON(path) {
+  const resp = await fetch(path, { cache: "no-store" });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
 
-  // Per-fixture table. We emit two rows per fixture (spdf, liteparse) and
-  // class the winning row so CSS can highlight it.
+function renderAccuracy(host, rows) {
   const tableRows = rows.flatMap((r) => {
     const engines = [["spdf", r.spdf]];
     if (r.lite) engines.push(["liteparse", r.lite]);
-    const winner = engines
-      .slice()
-      .sort((a, b) => b[1].f1 - a[1].f1)[0][0];
+    const winner = engines.slice().sort((a, b) => b[1].f1 - a[1].f1)[0][0];
     return engines.map(([name, e]) => {
       const cls = name === winner ? "winner" : "";
       return `
@@ -49,18 +39,23 @@
     });
   });
 
-  const mean = (key, engine) => {
-    const vals = rows
-      .map((r) => (engine === "spdf" ? r.spdf : r.lite))
-      .filter(Boolean)
-      .map((e) => e[key]);
-    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
-  };
+  const spdfF1 = mean(rows, (r) => r.spdf, "f1");
+  const spdfMs = mean(rows, (r) => r.spdf, "ms");
+  const liteF1 = mean(rows, (r) => r.lite, "f1");
+  const liteMs = mean(rows, (r) => r.lite, "ms");
 
-  const spdfF1 = mean("f1", "spdf");
-  const spdfMs = mean("ms", "spdf");
-  const liteF1 = mean("f1", "lite");
-  const liteMs = mean("ms", "lite");
+  const liteSummary = rows.some((r) => r.lite)
+    ? `
+      <div class="stat">
+        <div class="label">liteparse mean F1</div>
+        <div class="value">${pct(liteF1)}</div>
+      </div>
+      <div class="stat">
+        <div class="label">liteparse mean wall-clock</div>
+        <div class="value">${liteMs.toFixed(0)} ms</div>
+      </div>
+    `
+    : "";
 
   host.innerHTML = `
     <table>
@@ -77,7 +72,6 @@
       </thead>
       <tbody>${tableRows.join("")}</tbody>
     </table>
-
     <div class="summary-card">
       <div class="stat">
         <div class="label">spdf mean F1</div>
@@ -87,21 +81,114 @@
         <div class="label">spdf mean wall-clock</div>
         <div class="value">${spdfMs.toFixed(0)} ms</div>
       </div>
-      ${
-        rows.some((r) => r.lite)
-          ? `
-        <div class="stat">
-          <div class="label">liteparse mean F1</div>
-          <div class="value">${pct(liteF1)}</div>
-        </div>
-        <div class="stat">
-          <div class="label">liteparse mean wall-clock</div>
-          <div class="value">${liteMs.toFixed(0)} ms</div>
-        </div>
-      `
-          : ""
-      }
+      ${liteSummary}
     </div>
   `;
   host.removeAttribute("aria-busy");
+}
+
+function renderSpatial(host, rows) {
+  const tableRows = rows.flatMap((r) => {
+    const engines = [["spdf", r.spdf]];
+    if (r.lite) engines.push(["liteparse", r.lite]);
+    const winner = engines
+      .slice()
+      .sort((a, b) => b[1].mean_iou - a[1].mean_iou)[0][0];
+    return engines.map(([name, s]) => {
+      const cls = name === winner ? "winner" : "";
+      return `
+        <tr class="${cls}">
+          <td>${r.fixture}</td>
+          <td class="engine">${name}</td>
+          <td class="num">${s.matches}</td>
+          <td class="num">${s.mean_iou.toFixed(3)}</td>
+          <td class="num">${pct(s.iou_ge_threshold_rate)}</td>
+          <td class="num">${s.mean_centroid_err_pt.toFixed(2)} pt</td>
+        </tr>
+      `;
+    });
+  });
+
+  const spdfIou = mean(rows, (r) => r.spdf, "mean_iou");
+  const spdfGe = mean(rows, (r) => r.spdf, "iou_ge_threshold_rate");
+  const spdfErr = mean(rows, (r) => r.spdf, "mean_centroid_err_pt");
+  const liteIou = mean(rows, (r) => r.lite, "mean_iou");
+  const liteGe = mean(rows, (r) => r.lite, "iou_ge_threshold_rate");
+  const liteErr = mean(rows, (r) => r.lite, "mean_centroid_err_pt");
+
+  const liteSummary = rows.some((r) => r.lite)
+    ? `
+      <div class="stat">
+        <div class="label">liteparse mean IoU</div>
+        <div class="value">${liteIou.toFixed(3)}</div>
+      </div>
+      <div class="stat">
+        <div class="label">liteparse IoU ≥ 0.5</div>
+        <div class="value">${pct(liteGe)}</div>
+      </div>
+      <div class="stat">
+        <div class="label">liteparse centroid err</div>
+        <div class="value">${liteErr.toFixed(2)} pt</div>
+      </div>
+    `
+    : "";
+
+  host.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>fixture</th>
+          <th>engine</th>
+          <th class="num">matched</th>
+          <th class="num">mean IoU</th>
+          <th class="num">IoU ≥ 0.5</th>
+          <th class="num">centroid err</th>
+        </tr>
+      </thead>
+      <tbody>${tableRows.join("")}</tbody>
+    </table>
+    <div class="summary-card">
+      <div class="stat">
+        <div class="label">spdf mean IoU</div>
+        <div class="value">${spdfIou.toFixed(3)}</div>
+      </div>
+      <div class="stat">
+        <div class="label">spdf IoU ≥ 0.5</div>
+        <div class="value">${pct(spdfGe)}</div>
+      </div>
+      <div class="stat">
+        <div class="label">spdf centroid err</div>
+        <div class="value">${spdfErr.toFixed(2)} pt</div>
+      </div>
+      ${liteSummary}
+    </div>
+  `;
+  host.removeAttribute("aria-busy");
+}
+
+(async () => {
+  const accuracyHost = document.getElementById("benchmark-block");
+  const spatialHost = document.getElementById("spatial-block");
+
+  if (accuracyHost) {
+    try {
+      const data = await loadJSON("./benchmark.json");
+      if ((data.rows || []).length === 0) throw new Error("no rows");
+      renderAccuracy(accuracyHost, data.rows);
+    } catch (err) {
+      accuracyHost.innerHTML = `<p class="muted">Accuracy results unavailable: ${err.message}.</p>`;
+      accuracyHost.removeAttribute("aria-busy");
+    }
+  }
+
+  if (spatialHost) {
+    try {
+      const data = await loadJSON("./spatial.json");
+      if ((data.rows || []).length === 0) throw new Error("no rows");
+      renderSpatial(spatialHost, data.rows);
+    } catch (err) {
+      spatialHost.innerHTML = `<p class="muted">Spatial results unavailable: ${err.message}.</p>`;
+      spatialHost.removeAttribute("aria-busy");
+    }
+  }
 })();

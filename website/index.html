@@ -120,6 +120,18 @@ git clone https://github.com/Fanaperana/spdf &amp;&amp; cd spdf &amp;&amp; make 
       <p class="muted">Loading latest benchmark results…</p>
     </div>
 
+    <h3 class="sub">Spatial precision</h3>
+    <p class="muted">
+      A spatial parser's job is to put each word in the right place on the
+      page, not just to emit the right tokens. We also compare every matched
+      word's bounding box against the raw-tesseract ground truth and report
+      mean IoU, the fraction of matches that clear the COCO-style IoU ≥ 0.5
+      "well localised" bar, and the mean centroid error in PDF points.
+    </p>
+    <div id="spatial-block" aria-busy="true">
+      <p class="muted">Loading spatial results…</p>
+    </div>
+
     <p class="muted">
       Raw outputs are committed under
       <a href="https://github.com/Fanaperana/spdf/tree/main/benchmark/outputs" rel="noopener"><code>benchmark/outputs/</code></a>. Reproduce locally with

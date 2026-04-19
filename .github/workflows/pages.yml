@@ -83,6 +83,10 @@ jobs:
         run: |
           LITEPARSE_DIR=/tmp/liteparse ./benchmark/run.sh
           cp benchmark/results/summary.json website/benchmark.json
+          LITEPARSE_DIR=/tmp/liteparse python3 benchmark/spatial.py || true
+          if [ -f benchmark/results/spatial.json ]; then
+            cp benchmark/results/spatial.json website/spatial.json
+          fi
           python3 benchmark/update_readme.py || true
         continue-on-error: true
 

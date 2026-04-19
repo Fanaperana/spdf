@@ -102,6 +102,7 @@ pdfium-download: ## Fetch pdfium via xtask (only needed when bundling is disable
 
 benchmark: ## Run full benchmark (spdf vs liteparse vs raw tesseract). Set LITEPARSE_DIR=
 	@bash benchmark/run.sh $(LITEPARSE_DIR)
+	@python3 benchmark/spatial.py
 
 benchmark-update: benchmark ## Run benchmark and refresh README table
 	@python3 benchmark/update_readme.py
