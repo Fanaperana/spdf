@@ -217,6 +217,14 @@ impl SpdfParser {
         // `> 0.3` confidence cut-off matches liteparse exactly.
         for (idx, ocr_results) in results {
             let page = &mut pages[idx];
+            // Snapshot the pre-OCR text items so adjacent OCR words don't
+            // shadow each other via the overlap filter — tight kerning
+            // routinely puts neighbouring word bboxes within the 2-point
+            // overlap tolerance, which would otherwise drop every other
+            // word. The overlap check exists to avoid re-emitting text we
+            // already got from the PDF text layer, not to dedupe OCR
+            // against itself.
+            let existing_len = page.text_items.len();
             let mut appended = 0usize;
             for r in ocr_results {
                 if r.confidence <= 0.3 {
@@ -230,7 +238,7 @@ impl SpdfParser {
                 if pw <= 0.0 || ph <= 0.0 {
                     continue;
                 }
-                if overlaps_existing_text(&page.text_items, px, py, pw, ph) {
+                if overlaps_existing_text(&page.text_items[..existing_len], px, py, pw, ph) {
                     continue;
                 }
                 let cleaned = clean_ocr_table_artifacts(&r.text);
