@@ -170,7 +170,7 @@ for per-release detail.
 | Security policy | see [SECURITY.md](SECURITY.md) |
 | CLI / Rust library API | best-effort stable, breaks noted in [CHANGELOG.md](CHANGELOG.md) |
 | `spdf-ffi` C ABI | **unstable** — symbols may change across 0.x releases |
-| crates.io / npm publication | not yet; install from source |
+| crates.io publication | [`spdf-core`](https://crates.io/crates/spdf-core), [`spdf-cli`](https://crates.io/crates/spdf-cli), and all sub-crates are on crates.io from 0.2.0-alpha.1 |
 
 **Recommended posture** when parsing untrusted PDFs today:
 
@@ -187,6 +187,15 @@ Then wrap the process in a resource-capped sandbox (`systemd-run
 full hardening checklist in [SECURITY.md](SECURITY.md).
 
 ## Install
+
+### From crates.io
+
+```sh
+cargo install spdf-cli --version 0.2.0-alpha.1
+# installs the `spdf` binary. `libpdfium` is downloaded and bundled
+# at build time (no extra runtime deps). Add `--features tesseract`
+# to compile in local Tesseract OCR.
+```
 
 ### Prebuilt binaries
 
