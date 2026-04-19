@@ -75,6 +75,11 @@ struct ParseArgs {
     #[arg(long = "preserve-small-text", default_value_t = false)]
     preserve_small_text: bool,
 
+    /// Detect tabular regions and attach structured rows to each page
+    /// in the JSON output under `tables`. Off by default.
+    #[arg(long = "detect-tables", default_value_t = false)]
+    detect_tables: bool,
+
     /// Max pages to process.
     #[arg(long, default_value_t = 10_000)]
     max_pages: u32,
@@ -242,6 +247,7 @@ fn run_parse(args: ParseArgs, quiet: bool) -> Result<()> {
         cfg.tessdata_path = Some(p.to_string_lossy().into_owned());
     }
     cfg.preserve_very_small_text = args.preserve_small_text;
+    cfg.detect_tables = args.detect_tables;
     if args.trace_grid || args.visualize_grid.is_some() {
         let mut debug = spdf_types::DebugConfig::default();
         debug.enabled = true;

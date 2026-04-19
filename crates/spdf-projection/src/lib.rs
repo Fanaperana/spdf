@@ -70,6 +70,7 @@ pub fn project_page(page: PageInput, debug: bool, preserve_small: bool) -> Parse
             text: String::new(),
             text_items,
             bounding_boxes: None,
+            tables: None,
         };
     }
 
@@ -146,6 +147,7 @@ pub fn project_page(page: PageInput, debug: bool, preserve_small: bool) -> Parse
         text,
         text_items,
         bounding_boxes: None,
+        tables: None,
     }
 }
 
@@ -435,8 +437,23 @@ fn filter_small_text_rows(rows: Vec<Row>, items: &[TextItem]) -> Vec<Row> {
 
         // Pure small-glyph row: drop only when it looks like a QR /
         // barcode cluster. See const doc-comments for thresholds.
-        if small_count < SMALL_TEXT_CLUSTER_MIN_COUNT {
+        //
+        // Also drop a single small-glyph item whose concatenated text is
+        // long — after `merge_continuous_runs` a QR row collapses to one
+        // TextItem like "5555555...5" that would otherwise sneak past
+        // the item-count check.
+        let total_chars: usize = row
+            .iter()
+            .map(|&i| items[i].str.chars().filter(|c| !c.is_whitespace()).count())
+            .sum();
+        if small_count < SMALL_TEXT_CLUSTER_MIN_COUNT
+            && total_chars < SMALL_TEXT_CLUSTER_MIN_COUNT
+        {
             out.push(row);
+            continue;
+        }
+        if small_count == 1 && total_chars >= SMALL_TEXT_CLUSTER_MIN_COUNT {
+            // Single merged microprint item → drop.
             continue;
         }
 
@@ -830,17 +847,22 @@ mod tests {
 
     #[test]
     fn qr_code_microglyph_row_is_dropped_by_default() {
-        // Mix one normal row with a row of sub-2pt QR-encoded numbers.
-        // The QR row should vanish from rendered text.
-        let mut items = vec![
+        // Real QR-like row: a single already-merged microprint item with
+        // many concatenated glyphs and a tiny height. Triggers the
+        // "single-item microprint" branch of the density filter.
+        let mut microprint = ti(
+            "5050550505505055050550505505055050550505",
+            60.0,
+            100.0,
+            24.0,
+            1.5,
+        );
+        microprint.font_size = Some(1.5);
+        let items = vec![
             ti("Header", 10.0, 50.0, 40.0, 10.0),
             ti("Footer", 10.0, 200.0, 40.0, 10.0),
+            microprint,
         ];
-        for i in 0..10 {
-            let mut it = ti("50505", 60.0 + i as f64 * 22.0, 100.0, 21.6, 1.5);
-            it.font_size = Some(1.5);
-            items.push(it);
-        }
         let page = PageInput {
             page_num: 1,
             width: 500.0,
@@ -848,11 +870,15 @@ mod tests {
             text_items: items.clone(),
         };
         let out = project_page(page, false, false);
-        assert!(!out.text.contains("50505"), "QR row leaked: {:?}", out.text);
+        assert!(
+            !out.text.contains("5050"),
+            "microprint row leaked: {:?}",
+            out.text
+        );
         assert!(out.text.contains("Header"));
         assert!(out.text.contains("Footer"));
 
-        // And the inverse: with preserve_small=true, micro-text is kept.
+        // With preserve_small=true, micro-text is kept.
         let page2 = PageInput {
             page_num: 1,
             width: 500.0,
@@ -860,7 +886,33 @@ mod tests {
             text_items: items,
         };
         let out2 = project_page(page2, false, true);
-        assert!(out2.text.contains("50505"));
+        assert!(out2.text.contains("5050"));
+    }
+
+    #[test]
+    fn sparse_small_text_is_kept() {
+        // Revision stamp "(Rev. 03/2024)": only ~8 small glyphs with wide
+        // pitch. Must NOT be dropped by the new density-aware filter.
+        let items = vec![
+            ti("Heading", 10.0, 50.0, 60.0, 12.0),
+            {
+                let mut it = ti("(Rev. 03/2024)", 100.0, 100.0, 60.0, 1.5);
+                it.font_size = Some(1.5);
+                it
+            },
+        ];
+        let page = PageInput {
+            page_num: 1,
+            width: 500.0,
+            height: 700.0,
+            text_items: items,
+        };
+        let out = project_page(page, false, false);
+        assert!(
+            out.text.contains("Rev"),
+            "sparse small-text row was wrongly dropped: {:?}",
+            out.text
+        );
     }
 }
 

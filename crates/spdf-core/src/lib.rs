@@ -165,6 +165,15 @@ impl SpdfParser {
             }
         }
 
+        if self.config.detect_tables {
+            for page in processed.iter_mut() {
+                let tables = spdf_processing::tables::detect_tables(&page.text_items);
+                if !tables.is_empty() {
+                    page.tables = Some(tables);
+                }
+            }
+        }
+
         let full_text = processed
             .iter()
             .map(|p| p.text.as_str())
@@ -331,6 +340,7 @@ impl SpdfParser {
         };
         let engine = Arc::clone(&self.pdf_engine);
         let precise_bbox = self.config.precise_bounding_box;
+        let detect_tables = self.config.detect_tables;
         let debug_on = self.config.debug.as_ref().is_some_and(|d| d.enabled);
         let cfg = self.config.clone();
         let iter = page_numbers.into_iter().map(move |page_num| {
@@ -349,6 +359,12 @@ impl SpdfParser {
                 page.bounding_boxes = Some(spdf_processing::bbox::build_bounding_boxes(
                     &page.text_items,
                 ));
+            }
+            if detect_tables {
+                let tables = spdf_processing::tables::detect_tables(&page.text_items);
+                if !tables.is_empty() {
+                    page.tables = Some(tables);
+                }
             }
             if debug_on {
                 debug!(page = page.page_num, "spdf: streamed");
@@ -450,6 +466,7 @@ fn plain_text_result(content: String) -> ParseResult {
         text: content.clone(),
         text_items: vec![TextItem::new(&content, 0.0, 0.0, 0.0, 0.0)],
         bounding_boxes: None,
+        tables: None,
     };
     let mut result = ParseResult {
         pages: vec![page],

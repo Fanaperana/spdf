@@ -168,6 +168,29 @@ pub struct ParsedPage {
     pub text_items: Vec<TextItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bounding_boxes: Option<Vec<BoundingBox>>,
+    /// Structured tables detected on this page, when
+    /// [`crate::ParseConfig::detect_tables`] is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tables: Option<Vec<Table>>,
+}
+
+/// A structured table detected on a page. Rows contain string cells in
+/// column order; cells corresponding to "no item" slots are empty strings.
+/// Coordinates are in PDF points (top-left origin).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Table {
+    /// 1-based index within the page.
+    pub id: u32,
+    /// Bounding box covering all cells.
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    /// Detected column x-centres, in reading order.
+    pub column_centres: Vec<f64>,
+    /// Rows of cell strings; inner length == `column_centres.len()`.
+    pub rows: Vec<Vec<String>>,
 }
 
 /// A text element from JSON output.

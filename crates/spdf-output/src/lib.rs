@@ -79,6 +79,7 @@ mod tests {
                     x2: 60.0,
                     y2: 32.0,
                 }]),
+                tables: None,
             }],
             text: "hello world".into(),
             json: None,

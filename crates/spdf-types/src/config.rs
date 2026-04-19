@@ -89,6 +89,10 @@ pub struct ParseConfig {
     pub precise_bounding_box: bool,
     pub preserve_very_small_text: bool,
     pub preserve_layout_alignment_across_pages: bool,
+    /// When true, detect tabular regions on each page and attach them
+    /// to [`ParsedPage::tables`]. Off by default — adds a small
+    /// post-projection pass that costs ~O(items) per page.
+    pub detect_tables: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
     /// Fail `parse()` with [`SpdfError::InvalidInput`] once wall-clock
@@ -120,6 +124,7 @@ impl Default for ParseConfig {
             precise_bounding_box: true,
             preserve_very_small_text: false,
             preserve_layout_alignment_across_pages: false,
+            detect_tables: false,
             password: None,
             timeout_secs: None,
             max_input_bytes: None,

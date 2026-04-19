@@ -8,4 +8,5 @@ pub mod clean_text;
 pub mod markup;
 pub mod ocr_utils;
 pub mod search;
+pub mod tables;
 pub mod text_utils;
