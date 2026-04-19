@@ -14,10 +14,12 @@ members = [
     "xtask",
 ]
 # spdf-node (napi-rs) is opt-in; excluded from default builds because it
-# requires a Node toolchain. Build it explicitly with --manifest-path.
+# requires a Node toolchain. spdf-py (PyO3) is opt-in for the same reason —
+# it links against libpython and is built via maturin. Build it explicitly
+# with `maturin develop -m crates/spdf-py/Cargo.toml`.
 # fuzz/ is managed by cargo-fuzz and opts itself out of the workspace,
 # but we list it here for explicit exclusion too.
-exclude = ["crates/spdf-node", "fuzz"]
+exclude = ["crates/spdf-node", "crates/spdf-py", "fuzz"]
 
 [workspace.package]
 version = "0.2.0-alpha.2"

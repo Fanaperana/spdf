@@ -97,7 +97,7 @@ mean wall-clock < 100 ms, benchmark snapshot committed.
 - [ ] **#T4.1 Windows prebuilt binary** (issue #2, needs Win host)
 - [ ] **#T4.2 macOS prebuilt binaries** (issue #1, needs Mac host)
 - [ ] **#T4.3 OSS-Fuzz onboarding** (issue #4) — continuous-fuzz badge
-- [ ] **#T4.4 Python bindings via PyO3** — opens data-science market
+- [x] **#T4.4 Python bindings via PyO3** — `spdf` Python module via maturin (crates/spdf-py)
 - [ ] **#T4.5 WASM build + live web demo** — drop-a-PDF page on the
       existing [website/](website/)
 - [ ] **#T4.6 Fix pdfium OOM** (issue #3) — still open; real fix requires

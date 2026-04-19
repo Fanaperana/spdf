@@ -1,0 +1,25 @@
+[package]
+name = "spdf-py"
+version = "0.2.0-alpha.2"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/Fanaperana/spdf"
+authors = ["spdf contributors"]
+description = "Python bindings for spdf — fast, spatially-precise PDF parsing."
+publish = false
+
+[lib]
+name = "spdf"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py38"] }
+serde_json = "1"
+spdf-core = { path = "../spdf-core" }
+spdf-types = { path = "../spdf-types" }
+spdf-output = { path = "../spdf-output" }
+
+[features]
+default = []
+tesseract = ["spdf-core/tesseract"]
