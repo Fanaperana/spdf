@@ -29,6 +29,7 @@
 use std::cell::RefCell;
 
 use spdf_types::{SpdfError, SpdfResult};
+use tesseract::PageSegMode;
 
 use crate::engine::{OcrEngine, OcrOptions, OcrResult};
 
@@ -115,8 +116,14 @@ impl OcrEngine for TesseractEngine {
             if needs_new {
                 // Drop the old instance first (frees its language model RAM).
                 *slot = None;
-                let tess = tesseract::Tesseract::new(self.datapath.as_deref(), Some(&lang))
+                let mut tess = tesseract::Tesseract::new(self.datapath.as_deref(), Some(&lang))
                     .map_err(|e| SpdfError::Ocr(format!("tesseract init ({lang}): {e}")))?;
+                // The Rust binding inherits libtesseract's C++ default of
+                // PSM_SINGLE_BLOCK (6), which treats the whole page as one
+                // uniform block and drops ~2/3 of a multi-cell layout. The
+                // `tesseract` command-line tool defaults to PSM_AUTO (3)
+                // instead, which is what we actually want.
+                tess.set_page_seg_mode(PageSegMode::PsmAuto);
                 *slot = Some(CacheEntry {
                     key,
                     tess: Some(tess),
@@ -127,6 +134,16 @@ impl OcrEngine for TesseractEngine {
             // Move the instance through the consuming-builder chain and put
             // it back for the next page on this thread.
             let tess = entry.tess.take().expect("tesseract instance present");
+            // `user_defined_dpi` must be set *before* the image is loaded so
+            // libtesseract doesn't fall back to 70 DPI on PNGs without a
+            // `pHYs` chunk (which pdfium-render produces). Without this the
+            // layout analyser miss-sizes characters on dense layouts.
+            let tess = if let Some(dpi) = options.dpi {
+                tess.set_variable("user_defined_dpi", &dpi.to_string())
+                    .map_err(|e| SpdfError::Ocr(format!("tesseract set user_defined_dpi: {e}")))?
+            } else {
+                tess
+            };
             let tess = tess
                 .set_image_from_mem(image)
                 .map_err(|e| SpdfError::Ocr(format!("tesseract set_image: {e}")))?;

@@ -158,6 +158,7 @@ impl SpdfParser {
         let options = OcrOptions {
             languages,
             correct_rotation: true,
+            dpi: Some(self.config.dpi),
         };
         // PDF spec constant: 72 points per inch. OCR coordinates come back in
         // image pixels at the render DPI.

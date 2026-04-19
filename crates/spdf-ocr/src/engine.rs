@@ -8,6 +8,9 @@ pub struct OcrOptions {
     /// ISO 639-3 (`"eng"`). The caller chooses the right form.
     pub languages: Vec<String>,
     pub correct_rotation: bool,
+    /// Render DPI the input image was produced at. Used by Tesseract to size
+    /// characters correctly. `None` leaves it to the engine's heuristics.
+    pub dpi: Option<u32>,
 }
 
 impl Default for OcrOptions {
@@ -15,6 +18,7 @@ impl Default for OcrOptions {
         Self {
             languages: vec!["en".into()],
             correct_rotation: false,
+            dpi: None,
         }
     }
 }
