@@ -7,13 +7,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use rayon::prelude::*;
-use spdf_convert::{convert_path_to_pdf, ConversionResult};
-use spdf_ocr::{HttpOcrEngine, OcrEngine, OcrOptions};
+use spdf_convert::{ConversionResult, convert_path_to_pdf};
+use spdf_ocr::{HttpOcrEngine, OcrEngine, OcrOptions, OcrResult};
 use spdf_output::{format_text, to_json};
 use spdf_pdf::{ExtractOptions, PageData, PdfDocumentHandle, PdfEngine, PdfiumEngine};
 use spdf_processing::bbox::build_bounding_boxes;
 use spdf_processing::text_utils::clean_ocr_table_artifacts;
-use spdf_projection::{project_pages_to_grid, PageInput};
+use spdf_projection::{PageInput, project_pages_to_grid};
 use spdf_types::{
     Language, ParseConfig, ParseInput, ParseResult, ParsedPage, ScreenshotResult, SpdfError,
     SpdfResult, TextItem,
@@ -68,7 +68,9 @@ impl SpdfParser {
             Materialised::PlainText(content) => return Ok(plain_text_result(content)),
         };
 
-        let doc = self.pdf_engine.load_bytes(&bytes, self.config.password.as_deref())?;
+        let doc = self
+            .pdf_engine
+            .load_bytes(&bytes, self.config.password.as_deref())?;
         let total_pages = doc.num_pages().min(self.config.max_pages);
         info!(pages = total_pages, "spdf: parsing");
 
@@ -92,7 +94,7 @@ impl SpdfParser {
             if let Some(ocr) = self.ocr_engine.as_ref() {
                 self.run_ocr(&doc, &mut page_datas, ocr.as_ref())?;
             } else {
-                debug!("spdf: ocr_enabled but no OCR engine configured; skipping");
+                warn_no_ocr_engine();
             }
         }
 
@@ -137,6 +139,12 @@ impl SpdfParser {
     /// Render each candidate page and append OCR text items that don't overlap
     /// existing PDF text. Mirrors `runOCR`/`processPageOcr` in
     /// `liteparse/src/core/parser.ts`.
+    ///
+    /// Pages are rendered and OCR'd on a rayon pool sized by
+    /// `config.num_workers`, matching liteparse's `Scheduler` concurrency.
+    /// The rendering step serialises internally on PDFium's global mutex, but
+    /// the heavy OCR step runs fully parallel because the Tesseract engine
+    /// uses a `thread_local!` cache to keep one warmed instance per worker.
     fn run_ocr(
         &self,
         doc: &<PdfiumEngine as PdfEngine>::Doc,
@@ -155,35 +163,62 @@ impl SpdfParser {
         // image pixels at the render DPI.
         let scale_factor = 72.0 / self.config.dpi as f64;
 
-        for page in pages.iter_mut() {
+        // Phase 1: figure out which pages actually need OCR, and render them.
+        // We collect `(page_idx, png_bytes)` so phase 2 can run OCR in
+        // parallel without borrowing `pages` mutably.
+        let mut todo: Vec<(usize, u32)> = Vec::new();
+        for (idx, page) in pages.iter().enumerate() {
             let text_length: usize = page.text_items.iter().map(|t| t.str.len()).sum();
             let needs_full_ocr = text_length < 100 || !page.images.is_empty();
-            if !needs_full_ocr {
-                continue;
+            if needs_full_ocr {
+                todo.push((idx, page.page_num));
             }
+        }
+        if todo.is_empty() {
+            return Ok(());
+        }
 
-            let image = match self
-                .pdf_engine
-                .render_page_png(doc, page.page_num, self.config.dpi)
-            {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    warn!(page = page.page_num, error = %e, "spdf: render for OCR failed");
-                    continue;
-                }
-            };
+        // Phase 2: render + OCR in parallel. `pdf_engine.render_page_png` is
+        // `&self` and internally serialises on PDFium's global mutex; that's
+        // fine because OCR dominates wall-clock time by orders of magnitude.
+        let num_workers = self.config.num_workers.max(1);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_workers)
+            .thread_name(|i| format!("spdf-ocr-{i}"))
+            .build()
+            .map_err(|e| SpdfError::Ocr(format!("ocr thread pool: {e}")))?;
 
-            let results = match ocr.recognize(&image, &options) {
-                Ok(r) => r,
-                Err(e) => {
-                    warn!(page = page.page_num, error = %e, "spdf: OCR failed");
-                    continue;
-                }
-            };
+        let engine = self.pdf_engine.clone();
+        let dpi = self.config.dpi;
+        let results: Vec<(usize, Vec<OcrResult>)> = pool.install(|| {
+            todo.par_iter()
+                .map(|&(idx, page_num)| {
+                    let image = match engine.render_page_png(doc, page_num, dpi) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            warn!(page = page_num, error = %e, "spdf: render for OCR failed");
+                            return (idx, Vec::new());
+                        }
+                    };
+                    match ocr.recognize(&image, &options) {
+                        Ok(r) => (idx, r),
+                        Err(e) => {
+                            warn!(page = page_num, error = %e, "spdf: OCR failed");
+                            (idx, Vec::new())
+                        }
+                    }
+                })
+                .collect()
+        });
 
+        // Phase 3: merge OCR words into each page's text items, dropping
+        // low-confidence hits and any that overlap existing PDF text. The
+        // `> 0.3` confidence cut-off matches liteparse exactly.
+        for (idx, ocr_results) in results {
+            let page = &mut pages[idx];
             let mut appended = 0usize;
-            for r in results {
-                if r.confidence <= 0.1 {
+            for r in ocr_results {
+                if r.confidence <= 0.3 {
                     continue;
                 }
                 let [x1, y1, x2, y2] = r.bbox;
@@ -198,7 +233,8 @@ impl SpdfParser {
                     continue;
                 }
                 let cleaned = clean_ocr_table_artifacts(&r.text);
-                if cleaned.is_empty() {
+                let cleaned = strip_ocr_pipe_artifacts(&cleaned);
+                if cleaned.is_empty() || is_ocr_punctuation_noise(&cleaned) {
                     continue;
                 }
                 let mut item = TextItem::new(cleaned, px, py, pw, ph);
@@ -227,7 +263,9 @@ impl SpdfParser {
                 return Ok(Box::new(std::iter::once(Ok(page))));
             }
         };
-        let doc = self.pdf_engine.load_bytes(&bytes, self.config.password.as_deref())?;
+        let doc = self
+            .pdf_engine
+            .load_bytes(&bytes, self.config.password.as_deref())?;
         let total = doc.num_pages().min(self.config.max_pages);
         let page_numbers = select_pages(total, self.config.target_pages.as_deref())?;
         let opts = ExtractOptions {
@@ -276,13 +314,17 @@ impl SpdfParser {
                 ));
             }
         };
-        let doc = self.pdf_engine.load_bytes(&bytes, self.config.password.as_deref())?;
+        let doc = self
+            .pdf_engine
+            .load_bytes(&bytes, self.config.password.as_deref())?;
         let total = doc.num_pages();
         let targets = page_numbers.unwrap_or_else(|| (1..=total).collect());
 
         let mut out = Vec::with_capacity(targets.len());
         for page_num in targets {
-            let png = self.pdf_engine.render_page_png(&doc, page_num, self.config.dpi)?;
+            let png = self
+                .pdf_engine
+                .render_page_png(&doc, page_num, self.config.dpi)?;
             // Width/height decoded lazily by the caller; 0 signals "unknown".
             out.push(ScreenshotResult {
                 page_num,
@@ -314,15 +356,17 @@ impl SpdfParser {
                 bytes: b,
                 tempdir: None,
             }),
-            ParseInput::Path(p) => match convert_path_to_pdf(&p, self.config.password.as_deref())? {
-                ConversionResult::Pdf {
-                    pdf_path, _tempdir, ..
-                } => Ok(Materialised::Pdf {
-                    bytes: std::fs::read(pdf_path)?,
-                    tempdir: _tempdir,
-                }),
-                ConversionResult::PlainText { content } => Ok(Materialised::PlainText(content)),
-            },
+            ParseInput::Path(p) => {
+                match convert_path_to_pdf(&p, self.config.password.as_deref())? {
+                    ConversionResult::Pdf {
+                        pdf_path, _tempdir, ..
+                    } => Ok(Materialised::Pdf {
+                        bytes: std::fs::read(pdf_path)?,
+                        tempdir: _tempdir,
+                    }),
+                    ConversionResult::PlainText { content } => Ok(Materialised::PlainText(content)),
+                }
+            }
         }
     }
 }
@@ -472,6 +516,30 @@ fn build_ocr_engine(config: &ParseConfig) -> Option<Arc<dyn OcrEngine>> {
     }
 }
 
+/// Emit a one-shot warning when OCR is requested but no engine is available,
+/// with concrete remediation steps.
+fn warn_no_ocr_engine() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let tesseract_built = cfg!(feature = "tesseract");
+        let msg = if tesseract_built {
+            "spdf: OCR requested but no engine configured. This build supports \
+             Tesseract; install libtesseract + language data (e.g. \
+             `apt install tesseract-ocr tesseract-ocr-eng`) or pass \
+             --ocr-server-url to use an HTTP OCR server. Any rasterized text \
+             in the PDF will be missing from the output."
+        } else {
+            "spdf: OCR requested but no engine configured. Either pass \
+             --ocr-server-url <URL> to use an HTTP OCR server, or rebuild \
+             spdf with the `tesseract` feature (`cargo build --release \
+             -p spdf-cli --features tesseract`, requires libtesseract and \
+             libleptonica). Rasterized text will be missing from the output."
+        };
+        warn!("{msg}");
+    });
+}
+
 /// True when an OCR bbox overlaps any existing text item (with a 2-point
 /// tolerance), matching liteparse's `overlapsExistingText`.
 fn overlaps_existing_text(items: &[TextItem], x: f64, y: f64, w: f64, h: f64) -> bool {
@@ -490,6 +558,26 @@ fn overlaps_existing_text(items: &[TextItem], x: f64, y: f64, w: f64, h: f64) ->
         }
     }
     false
+}
+
+/// Drop single-token OCR words that are pure punctuation, which Tesseract
+/// frequently hallucinates at the edges of rasterized text (trailing `|`,
+/// stray `.`, orphan brackets, etc.). A real sentence ends in punctuation
+/// *attached* to a word, not as its own token.
+fn is_ocr_punctuation_noise(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() {
+        return true;
+    }
+    // Keep anything that contains at least one alphanumeric character.
+    !t.chars().any(|c| c.is_alphanumeric())
+}
+
+/// Strip leading/trailing pipe characters that Tesseract hallucinates from
+/// vertical strokes at the edges of rasterized text (e.g. `"words.|"` → `"words."`).
+/// Only pipes are removed — other punctuation is legitimate.
+fn strip_ocr_pipe_artifacts(text: &str) -> String {
+    text.trim().trim_matches('|').trim().to_string()
 }
 
 #[cfg(test)]
