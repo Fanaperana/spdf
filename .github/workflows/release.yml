@@ -28,6 +28,12 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# Default GITHUB_TOKEN on new repos is read-only; we need write access to
+# create/update releases. `contents: write` is the minimum needed for
+# softprops/action-gh-release.
+permissions:
+  contents: write
+
 jobs:
   # ---------------------------------------------------------------------------
   # 1. Build a prebuilt tarball per target and publish to the GH release
