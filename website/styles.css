@@ -141,6 +141,49 @@ h2 {
   color: var(--accent);
   font-style: normal;
 }
+
+/* Typewriter headline
+   -----------------------------------------------------------------
+   Layout: "spdf — <typed text>|". Everything is on one line on
+   desktop; on narrow screens the typed text wraps below the prefix.
+   The caret blinks on a dedicated 500 ms interval (see typewriter.js)
+   so it's visually distinct from the typing cadence. */
+.hero-headline .typewriter {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0;
+  max-width: 900px;
+}
+.hero-headline .tw-prefix {
+  color: var(--accent);
+  font-weight: 700;
+}
+.hero-headline .tw-sep {
+  color: var(--fg-dim);
+  white-space: pre;
+}
+.hero-headline .tw-text {
+  color: var(--fg);
+  /* reserve space so the layout doesn't jitter as characters stream
+     in; a little min-height keeps the hero stable on first paint. */
+  min-height: 1.1em;
+  font-variant-ligatures: none;
+}
+.hero-headline .tw-caret {
+  display: inline-block;
+  margin-left: 2px;
+  color: var(--accent);
+  transform: translateY(-0.05em);
+  opacity: 1;
+  transition: opacity 80ms linear;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero-headline .tw-caret {
+    display: none;
+  }
+}
 .tagline {
   color: var(--fg-dim);
   font-size: 1.1rem;

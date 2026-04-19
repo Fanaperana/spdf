@@ -2,7 +2,17 @@
 
 # spdf
 
-**Fast, spatial PDF parsing in Rust.**
+**spdf** — *speed-f*: a **s**patial **PDF** parser.
+Column-aware text extraction at a lightning pace, in Rust.
+
+<!-- typewriter.gif placeholder — drop a recording of the website hero
+     here when we cut one. The phrases cycle through:
+       "fast, spatial PDF parsing in Rust."
+       "speedf. a lightning-fast PDF parser."
+       "spacial PDF parser. column-aware by design."
+       "single static binary. PDFium embedded."
+       "OCR built in. Tesseract + HTTP."
+-->
 
 Extract text with preserved columns, tables, and layout — plus optional OCR
 for scans, format conversion for Office docs, and a single self-contained
