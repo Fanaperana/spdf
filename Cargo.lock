@@ -1678,7 +1678,7 @@ dependencies = [
 
 [[package]]
 name = "spdf-cli"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1692,7 +1692,7 @@ dependencies = [
 
 [[package]]
 name = "spdf-convert"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "infer",
  "spdf-types",
@@ -1703,7 +1703,7 @@ dependencies = [
 
 [[package]]
 name = "spdf-core"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "rayon",
  "serde_json",
@@ -1720,7 +1720,7 @@ dependencies = [
 
 [[package]]
 name = "spdf-ffi"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "serde_json",
  "spdf-core",
@@ -1730,7 +1730,7 @@ dependencies = [
 
 [[package]]
 name = "spdf-ocr"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "reqwest",
  "serde",
@@ -1743,7 +1743,7 @@ dependencies = [
 
 [[package]]
 name = "spdf-output"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -1752,7 +1752,7 @@ dependencies = [
 
 [[package]]
 name = "spdf-pdf"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "flate2",
  "image",
@@ -1766,7 +1766,7 @@ dependencies = [
 
 [[package]]
 name = "spdf-processing"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "spdf-types",
  "tracing",
@@ -1774,7 +1774,7 @@ dependencies = [
 
 [[package]]
 name = "spdf-projection"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "indexmap",
  "proptest",
@@ -1785,7 +1785,7 @@ dependencies = [
 
 [[package]]
 name = "spdf-types"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "indexmap",
  "serde",
@@ -2755,7 +2755,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "anyhow",
  "clap",

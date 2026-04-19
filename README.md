@@ -191,7 +191,7 @@ full hardening checklist in [SECURITY.md](SECURITY.md).
 ### From crates.io
 
 ```sh
-cargo install spdf-cli --version 0.2.0-alpha.1
+cargo install spdf-cli --version 0.2.0-alpha.2
 # installs the `spdf` binary. `libpdfium` is downloaded and bundled
 # at build time (no extra runtime deps). Add `--features tesseract`
 # to compile in local Tesseract OCR.
@@ -207,7 +207,7 @@ with `--features spdf-cli/tesseract` for a local Tesseract build.
 
 | Target | Tarball | Status |
 | --- | --- | :---: |
-| `x86_64-unknown-linux-gnu` | `spdf-<version>-x86_64-unknown-linux-gnu.tar.gz` | ✅ attached to v0.2.0-alpha.1 |
+| `x86_64-unknown-linux-gnu` | `spdf-<version>-x86_64-unknown-linux-gnu.tar.gz` | ✅ attached to v0.2.0-alpha.2 |
 | `aarch64-unknown-linux-gnu` | `spdf-<version>-aarch64-unknown-linux-gnu.tar.gz` | ⬜ TODO |
 | `x86_64-apple-darwin` | `spdf-<version>-x86_64-apple-darwin.tar.gz` | ⬜ TODO — build on macOS Intel |
 | `aarch64-apple-darwin` | `spdf-<version>-aarch64-apple-darwin.tar.gz` | ⬜ TODO — build on Apple Silicon |
@@ -217,7 +217,7 @@ To produce a release tarball on a new host:
 
 ```sh
 cargo build --release -p spdf-cli
-VER=0.2.0-alpha.1
+VER=0.2.0-alpha.2
 TARGET=$(rustc -vV | awk '/^host:/ {print $2}')
 DIR="spdf-${VER}-${TARGET}"
 mkdir -p "dist/${DIR}"

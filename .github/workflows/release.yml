@@ -12,17 +12,17 @@ name: release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   # Allow dry runs from the Actions UI. A manual run will skip the actual
   # `cargo publish --dry-run` is used instead.
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Skip uploads / cargo publish. Useful for pipeline debugging.'
+        description: "Skip uploads / cargo publish. Useful for pipeline debugging."
         required: false
-        default: 'true'
+        default: "true"
         type: choice
-        options: ['true', 'false']
+        options: ["true", "false"]
 
 env:
   CARGO_TERM_COLOR: always

@@ -6,6 +6,8 @@ All notable changes to `spdf` land here. We follow
 
 ## [Unreleased]
 
+## [0.2.0-alpha.2] — 2026-04-19
+
 ### Added
 - Automated release pipeline: pushing a `v*` tag now triggers
   `.github/workflows/release.yml` which builds the Linux tarball,
@@ -18,8 +20,9 @@ All notable changes to `spdf` land here. We follow
 
 ### Changed
 - Workspace-wide `license` metadata aligned to `MIT` (matches the
-  `LICENSE` file — previously said `Apache-2.0`). Effective for the
-  next published version; 0.2.0-alpha.1 on crates.io is unchanged.
+  `LICENSE` file — previously said `Apache-2.0`). 0.2.0-alpha.1 on
+  crates.io keeps its stale metadata; this is the first release with
+  correct MIT identification end-to-end.
 - Production-readiness table now reports the real corpus size (9 PDF
   fixtures, not 5).
 

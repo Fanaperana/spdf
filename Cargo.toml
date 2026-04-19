@@ -20,7 +20,7 @@ members = [
 exclude = ["crates/spdf-node", "fuzz"]
 
 [workspace.package]
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -38,14 +38,14 @@ authors = ["spdf contributors"]
 
 [workspace.dependencies]
 # Internal crates
-spdf-types = { path = "crates/spdf-types", version = "0.2.0-alpha.1" }
-spdf-processing = { path = "crates/spdf-processing", version = "0.2.0-alpha.1" }
-spdf-projection = { path = "crates/spdf-projection", version = "0.2.0-alpha.1" }
-spdf-pdf = { path = "crates/spdf-pdf", version = "0.2.0-alpha.1" }
-spdf-ocr = { path = "crates/spdf-ocr", version = "0.2.0-alpha.1" }
-spdf-convert = { path = "crates/spdf-convert", version = "0.2.0-alpha.1" }
-spdf-output = { path = "crates/spdf-output", version = "0.2.0-alpha.1" }
-spdf-core = { path = "crates/spdf-core", version = "0.2.0-alpha.1" }
+spdf-types = { path = "crates/spdf-types", version = "0.2.0-alpha.2" }
+spdf-processing = { path = "crates/spdf-processing", version = "0.2.0-alpha.2" }
+spdf-projection = { path = "crates/spdf-projection", version = "0.2.0-alpha.2" }
+spdf-pdf = { path = "crates/spdf-pdf", version = "0.2.0-alpha.2" }
+spdf-ocr = { path = "crates/spdf-ocr", version = "0.2.0-alpha.2" }
+spdf-convert = { path = "crates/spdf-convert", version = "0.2.0-alpha.2" }
+spdf-output = { path = "crates/spdf-output", version = "0.2.0-alpha.2" }
+spdf-core = { path = "crates/spdf-core", version = "0.2.0-alpha.2" }
 
 # Third party
 anyhow = "1"
