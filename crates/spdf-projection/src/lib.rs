@@ -446,8 +446,7 @@ fn filter_small_text_rows(rows: Vec<Row>, items: &[TextItem]) -> Vec<Row> {
             .iter()
             .map(|&i| items[i].str.chars().filter(|c| !c.is_whitespace()).count())
             .sum();
-        if small_count < SMALL_TEXT_CLUSTER_MIN_COUNT
-            && total_chars < SMALL_TEXT_CLUSTER_MIN_COUNT
+        if small_count < SMALL_TEXT_CLUSTER_MIN_COUNT && total_chars < SMALL_TEXT_CLUSTER_MIN_COUNT
         {
             out.push(row);
             continue;
@@ -893,14 +892,11 @@ mod tests {
     fn sparse_small_text_is_kept() {
         // Revision stamp "(Rev. 03/2024)": only ~8 small glyphs with wide
         // pitch. Must NOT be dropped by the new density-aware filter.
-        let items = vec![
-            ti("Heading", 10.0, 50.0, 60.0, 12.0),
-            {
-                let mut it = ti("(Rev. 03/2024)", 100.0, 100.0, 60.0, 1.5);
-                it.font_size = Some(1.5);
-                it
-            },
-        ];
+        let items = vec![ti("Heading", 10.0, 50.0, 60.0, 12.0), {
+            let mut it = ti("(Rev. 03/2024)", 100.0, 100.0, 60.0, 1.5);
+            it.font_size = Some(1.5);
+            it
+        }];
         let page = PageInput {
             page_num: 1,
             width: 500.0,

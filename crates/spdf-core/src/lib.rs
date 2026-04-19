@@ -134,7 +134,10 @@ impl SpdfParser {
         // strictly precision-positive: the tokens were never real.
         for page in page_datas.iter_mut() {
             if is_cid_garbage_layer(&page.text_items) {
-                debug!(page = page.page_num, "spdf: dropping CID-garbage text layer");
+                debug!(
+                    page = page.page_num,
+                    "spdf: dropping CID-garbage text layer"
+                );
                 page.text_items.clear();
             }
         }
@@ -527,8 +530,8 @@ fn select_pages(total_pages: u32, target: Option<&str>) -> SpdfResult<Vec<u32>> 
 fn is_cid_garbage_layer(items: &[TextItem]) -> bool {
     // Tokens that commonly appear as fallbacks when ToUnicode is broken.
     const LIGATURE_TOKENS: &[&str] = &[
-        "fi", "fl", "ff", "ffi", "ffl", "ft", "st",
-        "\u{fb00}", "\u{fb01}", "\u{fb02}", "\u{fb03}", "\u{fb04}",
+        "fi", "fl", "ff", "ffi", "ffl", "ft", "st", "\u{fb00}", "\u{fb01}", "\u{fb02}", "\u{fb03}",
+        "\u{fb04}",
     ];
     let mut total = 0usize;
     let mut ligature_hits = 0usize;
@@ -542,8 +545,7 @@ fn is_cid_garbage_layer(items: &[TextItem]) -> bool {
         vocab.insert(s);
         let is_ligature = LIGATURE_TOKENS.iter().any(|&l| l == s);
         // Single non-alphanumeric glyphs also count as broken fallback.
-        let is_symbol = s.chars().count() == 1
-            && !s.chars().next().unwrap().is_alphanumeric();
+        let is_symbol = s.chars().count() == 1 && !s.chars().next().unwrap().is_alphanumeric();
         if is_ligature || is_symbol {
             ligature_hits += 1;
         }
