@@ -5,3 +5,7 @@
 
 # Private/local PDFs kept out of the public tree.
 example/avil.pdf
+
+# Tesseract language models that accidentally land in the worktree when
+# libtesseract downloads them.
+*.traineddata
