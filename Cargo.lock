@@ -1621,6 +1621,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "libc",
  "serde_json",
  "spdf-core",
  "spdf-types",
@@ -1692,11 +1693,14 @@ dependencies = [
 name = "spdf-pdf"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "image",
  "pdfium-render",
  "spdf-types",
+ "tar",
  "thiserror 2.0.18",
  "tracing",
+ "ureq",
 ]
 
 [[package]]

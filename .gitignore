@@ -2,3 +2,6 @@
 /pdfium/
 *.profraw
 .DS_Store
+
+# Private/local PDFs kept out of the public tree.
+example/avil.pdf
