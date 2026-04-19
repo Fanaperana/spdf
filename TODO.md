@@ -47,12 +47,10 @@ Headline today: spdf mean F1 **80.6 %** in **366 ms**; liteparse 77.4 % in
 - [x] **#T1.4 Parallel page extraction.** ✅ Already done.
       `spdf-core::parse` has used `rayon::par_iter` for per-page
       extraction since 0.1 — no change needed.
-- [ ] **#T1.5 `pdftotext -bbox-layout` as a second oracle** (issue #5).
-      Current spatial benchmark measures against raw tesseract, which
-      hallucinates on IRS forms. A pdftotext-vs-tesseract agreement
-      oracle will raise our apparent F1 on born-digital PDFs. *Expected:
-      IRS 1040 F1 moves from 73 % to 85 %+ under the new metric,
-      without changing any production code.*
+- [x] **#T1.5 `pdftotext -bbox-layout` as a second oracle** (issue #5). ✅ Landed.
+      `benchmark/spatial.py` now emits a "Vs pdftotext oracle" section
+      with per-fixture F1 + mean IoU against pdftotext word boxes.
+      Raster fixtures and CID-font PDFs (rfc9110) naturally drop out.
 
 **Acceptance for tier 1:** mean token F1 ≥ liteparse on every fixture,
 mean wall-clock < 100 ms, benchmark snapshot committed.
