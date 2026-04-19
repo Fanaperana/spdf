@@ -299,17 +299,32 @@ spdf batch-parse ./inputs ./outputs --format text
 ## Library usage
 
 ```rust
-use spdf_core::LiteParse;
+use spdf_core::SpdfParser;
 use spdf_types::ParseConfig;
 
-let parser = LiteParse::new(ParseConfig {
+let parser = SpdfParser::new(ParseConfig {
     ocr_enabled: false,
     ..Default::default()
 });
-let result = parser.parse_path("invoice.pdf")?;
+let result = parser.parse(std::path::Path::new("invoice.pdf"))?;
 for page in &result.pages {
     println!("--- page {} ---\n{}", page.page_num, page.text);
 }
+# Ok::<(), spdf_types::SpdfError>(())
+```
+
+Or use the ergonomic builder if you only want to tweak a few knobs:
+
+```rust
+use spdf_core::SpdfParser;
+
+let parser = SpdfParser::builder()
+    .timeout_secs(30)
+    .max_input_bytes(50 << 20)
+    .ocr_enabled(false)
+    .build();
+let result = parser.parse(std::path::Path::new("invoice.pdf"))?;
+# Ok::<(), spdf_types::SpdfError>(())
 ```
 
 ## Architecture
