@@ -136,6 +136,13 @@ impl SpdfParser {
 
         let mut processed: Vec<ParsedPage> = project_pages_to_grid(pages, &self.config);
 
+        // Strip running headers / footers that repeat across pages. Lifts
+        // precision on multi-page docs (NIST 800-53r5, NIST 800-63b, RFC
+        // specs) without hurting recall on prose pages.
+        if processed.len() >= 3 {
+            strip_repeating_running_text(&mut processed);
+        }
+
         if self.config.precise_bounding_box {
             for page in processed.iter_mut() {
                 page.bounding_boxes = Some(build_bounding_boxes(&page.text_items));
@@ -470,6 +477,88 @@ fn select_pages(total_pages: u32, target: Option<&str>) -> SpdfResult<Vec<u32>> 
     out.sort_unstable();
     out.dedup();
     Ok(out)
+}
+
+/// Detect and strip running headers and footers — lines that appear byte-
+/// identical on a majority of pages in the top/bottom 10% y-band. Runs only
+/// when the document has ≥ 3 pages.
+///
+/// Why: multi-page specs (NIST SP 800-53, RFC drafts) repeat a header on
+/// every page (e.g. "NIST SP 800-53, REV. 5   SECURITY AND PRIVACY CONTROLS")
+/// and a footer with the page number. Those tokens dilute precision because
+/// they do not appear in the tesseract ground-truth once per page; they are
+/// extracted once as a whole-doc artefact. Dropping them improves precision
+/// with negligible recall impact.
+fn strip_repeating_running_text(pages: &mut [ParsedPage]) {
+    let n_pages = pages.len();
+    if n_pages < 3 {
+        return;
+    }
+    // Threshold: a line must appear on at least this many pages (~60%).
+    let min_occurrences = ((n_pages as f64) * 0.6).ceil() as usize;
+
+    // Collect candidate lines from each page's top/bottom band. Using trimmed
+    // line text as the identity key; mid-page occurrences do NOT count, so we
+    // never strip prose that happens to repeat.
+    let mut counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for page in pages.iter() {
+        let h = page.height.max(1.0);
+        let top_band = h * 0.10;
+        let bot_band = h * 0.90;
+        let mut seen_on_page: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for item in &page.text_items {
+            let in_band = item.y <= top_band || item.y >= bot_band;
+            if !in_band {
+                continue;
+            }
+            let key = item.str.trim().to_string();
+            // Skip short or numeric-only (page numbers vary per page).
+            if key.len() < 4 {
+                continue;
+            }
+            if key.chars().all(|c| c.is_ascii_digit() || c.is_whitespace()) {
+                continue;
+            }
+            if seen_on_page.insert(key.clone()) {
+                *counts.entry(key).or_insert(0) += 1;
+            }
+        }
+    }
+
+    let repeating: std::collections::HashSet<String> = counts
+        .into_iter()
+        .filter(|&(_, c)| c >= min_occurrences)
+        .map(|(k, _)| k)
+        .collect();
+    if repeating.is_empty() {
+        return;
+    }
+
+    for page in pages.iter_mut() {
+        let h = page.height.max(1.0);
+        let top_band = h * 0.10;
+        let bot_band = h * 0.90;
+
+        // Drop matching text_items in the header/footer band.
+        page.text_items.retain(|item| {
+            let in_band = item.y <= top_band || item.y >= bot_band;
+            if !in_band {
+                return true;
+            }
+            !repeating.contains(item.str.trim())
+        });
+
+        // Strip matching lines from the projected text so the formatted
+        // output stays consistent with text_items.
+        let kept_lines: Vec<&str> = page
+            .text
+            .lines()
+            .filter(|line| !repeating.contains(line.trim()))
+            .collect();
+        page.text = kept_lines.join("\n");
+    }
 }
 
 /// Fluent builder equivalent to TS `new LiteParse(partial)`.

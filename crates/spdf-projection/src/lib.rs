@@ -384,34 +384,80 @@ fn rows_x_collide(a: &Row, b: &Row, items: &[TextItem]) -> bool {
 
 /// Glyphs shorter than this are considered "very small text". 2pt @ 72 DPI
 /// → ~8px @ 300 DPI, the practical floor for readable text. Anything
-/// smaller is almost always QR / barcode / microprint.
+/// smaller MIGHT be QR / barcode / microprint — but may also be a form
+/// revision stamp like "(Rev. 03/2024)". Density decides.
 const SMALL_FONT_SIZE_THRESHOLD: f64 = 2.0;
 
-/// Drop rows where more than 50% of the items are below the small-font
-/// threshold. Also drops items within a mixed row that fall below the
-/// threshold to keep the surviving row clean.
+/// A row of small glyphs is treated as QR / barcode noise only when the
+/// glyphs cluster tightly together. Measured as the **median** horizontal
+/// centre-to-centre distance between consecutive small glyphs in the row;
+/// real QR decoded as text sits well under 2 pt, whereas a rendered
+/// revision stamp at 1.5 pt still has character pitch of ~0.8-1.5 pt.
+///
+/// We err on the side of keeping text (higher recall) since a single
+/// false-positive QR row is cheaper than dropping a form field label.
+const SMALL_TEXT_CLUSTER_PITCH: f64 = 0.9;
+
+/// Additional safety valve: require at least this many small glyphs before
+/// we even consider calling a row QR/barcode. Short strings like
+/// "(Rev. 03/2024)" are ~15 glyphs; a QR/microprint row is typically
+/// hundreds.
+const SMALL_TEXT_CLUSTER_MIN_COUNT: usize = 30;
+
+/// Drop rows whose small-glyph content looks like rasterised QR /
+/// barcode / microprint (tight cluster, many glyphs). Keep rows whose
+/// small glyphs are sparse — those are legitimate micro-labels that the
+/// caller probably wants. Rows also survive when they have any
+/// full-size glyphs present; we just strip the noise.
 fn filter_small_text_rows(rows: Vec<Row>, items: &[TextItem]) -> Vec<Row> {
     let mut out: Vec<Row> = Vec::with_capacity(rows.len());
     for row in rows {
         if row.is_empty() {
             continue;
         }
-        let small = row
+        let small_count = row
             .iter()
             .filter(|&&i| items[i].height < SMALL_FONT_SIZE_THRESHOLD)
             .count();
-        if small * 2 > row.len() {
-            // >50% very small → drop the whole row (QR / barcode).
+        let has_large = small_count < row.len();
+
+        // Rows with any full-size glyphs: just strip the small ones.
+        if has_large {
+            let kept: Row = row
+                .into_iter()
+                .filter(|&i| items[i].height >= SMALL_FONT_SIZE_THRESHOLD)
+                .collect();
+            if !kept.is_empty() {
+                out.push(kept);
+            }
             continue;
         }
-        // Mixed row: drop the small items, keep the rest.
-        let kept: Row = row
-            .into_iter()
-            .filter(|&i| items[i].height >= SMALL_FONT_SIZE_THRESHOLD)
-            .collect();
-        if !kept.is_empty() {
-            out.push(kept);
+
+        // Pure small-glyph row: drop only when it looks like a QR /
+        // barcode cluster. See const doc-comments for thresholds.
+        if small_count < SMALL_TEXT_CLUSTER_MIN_COUNT {
+            out.push(row);
+            continue;
         }
+
+        // Measure cluster tightness via median horizontal spacing between
+        // consecutive glyphs after sorting by x.
+        let mut xs: Vec<f64> = row.iter().map(|&i| items[i].x).collect();
+        xs.sort_by(f64::total_cmp);
+        let mut gaps: Vec<f64> = xs.windows(2).map(|w| w[1] - w[0]).collect();
+        if gaps.is_empty() {
+            out.push(row);
+            continue;
+        }
+        gaps.sort_by(f64::total_cmp);
+        let median_pitch = gaps[gaps.len() / 2];
+        if median_pitch <= SMALL_TEXT_CLUSTER_PITCH {
+            // Tight cluster of many tiny glyphs → QR / barcode. Drop row.
+            continue;
+        }
+        // Spread out small glyphs (revision stamp, fine-print disclaimer).
+        // Keep the row.
+        out.push(row);
     }
     out
 }
