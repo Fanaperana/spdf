@@ -15,6 +15,15 @@ pdfium-render.workspace = true
 image.workspace = true
 thiserror.workspace = true
 
+[build-dependencies]
+ureq = { version = "2.12", features = ["tls"] }
+flate2 = "1.1.9"
+tar = "0.4"
+
 [features]
-default = ["pdfium"]
+default = ["pdfium", "bundled-pdfium"]
 pdfium = []
+# Download and embed libpdfium at build time so the resulting binary is
+# self-contained. Disable (with `--no-default-features --features pdfium`) for
+# smaller builds that rely on a system/xtask-provided pdfium.
+bundled-pdfium = []
