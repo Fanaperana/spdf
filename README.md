@@ -162,7 +162,7 @@ for per-release detail.
 | --- | --- |
 | JSON output schema (byte-compatible with LiteParse) | stable (covered by parity harness) |
 | Typed error enum at the public API (`SpdfError`) | stable |
-| Benchmark corpus (public-domain: IRS, NIST, RFC, scanned image) | 5 fixtures in [example/](example/) |
+| Benchmark corpus (public-domain: IRS, NIST, RFC, scanned image) | 9 fixtures in [example/](example/) |
 | Property tests (`cargo test -p spdf-projection proptests`) | panic-freedom + shuffle-stability |
 | Fuzz harness (`cargo +nightly fuzz run parse_pdf`) | [fuzz/](fuzz/) — run before exposing to untrusted input |
 | Cross-platform CI | Linux + macOS + Windows; MSRV 1.85; rustdoc warnings gated |
@@ -274,16 +274,28 @@ we cut a proper MSVC-native build.
 ## Quick start
 
 ```sh
+# Confirm the install
+spdf --version
+
 # Plain text with preserved layout
 spdf parse invoice.pdf --no-ocr --format text
+
+# Read from stdin (handy for piping through curl / aws s3 cp)
+cat invoice.pdf | spdf parse - --no-ocr
 
 # Structured JSON with per-glyph bounding boxes
 spdf parse invoice.pdf --no-ocr --format json > out.json
 
-# OCR-only mode for scanned PDFs
+# Password-protected PDFs
+spdf parse confidential.pdf --password 'hunter2'
+
+# Keep very-small glyphs (<2 pt) — useful for IRS-style form field labels
+spdf parse irs-fw9.pdf --preserve-small-text
+
+# OCR-only mode for scanned PDFs (local Tesseract; needs --features tesseract)
 spdf parse scan.pdf --ocr-language eng
 
-# Use an external OCR server (PaddleOCR, EasyOCR, etc.)
+# Use an external OCR server (PaddleOCR, EasyOCR, etc.) — works on every platform
 spdf parse scan.pdf --ocr-server-url http://localhost:8000
 
 # Render specific pages
@@ -295,6 +307,9 @@ spdf screenshot report.pdf -o ./pages --dpi 200
 # Batch-convert a directory of PDFs
 spdf batch-parse ./inputs ./outputs --format text
 ```
+
+Exit codes: `0` success, `1` parse/OCR error (with `Error: …` on stderr),
+`2` invalid CLI arguments (standard clap).
 
 ## Library usage
 
@@ -353,6 +368,25 @@ See [AGENTS.md](AGENTS.md) for the full crate map and
 - Python bindings via PyO3
 - `spdf serve` — a local HTTP parsing service
 - Optional ML-based reading-order classifier (opt-in, `burn` feature flag)
+
+## Release process (for maintainers)
+
+Releases are fully automated by [`.github/workflows/release.yml`](.github/workflows/release.yml):
+
+1. Bump `version` in the workspace `Cargo.toml` and update [CHANGELOG.md](CHANGELOG.md).
+2. `git commit -am "release 0.x.y" && git push`
+3. `git tag -a v0.x.y -m "spdf 0.x.y" && git push origin v0.x.y`
+
+The workflow then:
+- builds the `x86_64-unknown-linux-gnu` tarball and attaches it to the
+  GitHub release (creating one if missing),
+- runs `cargo publish` for all 9 crates in topological order using the
+  `CRATES_IO_TOKEN` repository secret, with retry-on-429 for the
+  crates.io new-crate rate limit.
+
+To smoke-test the pipeline without consuming a real version number, run
+the workflow manually from the **Actions** tab with `dry_run = true` —
+it skips uploads and runs `cargo publish --dry-run` for every crate.
 
 ## Acknowledgements
 
