@@ -31,8 +31,12 @@ fn main() {
     let skip = std::env::var("SPDF_PDFIUM_SKIP_BUNDLE")
         .map(|v| v != "0" && !v.is_empty())
         .unwrap_or(false);
+    // docs.rs has no network access — skip the download so `cargo doc`
+    // succeeds there even though the resulting crate can't load
+    // pdfium at runtime.
+    let on_docs_rs = std::env::var_os("DOCS_RS").is_some();
 
-    if !feature_on || skip {
+    if !feature_on || skip || on_docs_rs {
         write_empty_bundle(&bundle_rs);
         return;
     }

@@ -1,5 +1,9 @@
 //! C-ABI bindings for `spdf-core`.
 //!
+//! **Status: experimental.** The ABI is not stable and may change in
+//! any 0.x release. Not published to crates.io. Use the CLI or the
+//! Rust API for production today; file an issue if you need stable FFI.
+//!
 //! Exposes a minimal surface so Node.js (via `bun:ffi`, `ffi-napi`, `koffi`),
 //! Deno, Python `ctypes`, and other FFI consumers can parse PDFs without
 //! going through the CLI.

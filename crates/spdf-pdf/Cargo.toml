@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "PdfEngine trait + PDFium-backed implementation."
 
+[package.metadata.docs.rs]
+# docs.rs has no network access; skip the bundled-pdfium download.
+no-default-features = true
+features = ["pdfium"]
+
 [dependencies]
 spdf-types.workspace = true
 tracing.workspace = true

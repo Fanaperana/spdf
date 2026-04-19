@@ -45,11 +45,16 @@ be reported to their respective projects.
 PDF is a notoriously adversarial format. If you are parsing untrusted
 documents, follow these practices:
 
-- **Cap input size** at the ingress layer. spdf itself does not impose
-  a hard byte limit, so a 2 GiB PDF bomb will happily try to load.
+- **Cap input size** at the ingress layer *and* via
+  `ParseConfig::max_input_bytes` (not set by default).
 - **Cap page count** via `ParseConfig::max_pages` (default 1000). A
   malicious PDF with a million-entry page tree will still slow down
   pdfium's tree walk even if you cap pages.
+- **Set a timeout** via `ParseConfig::timeout_secs`. Fuzzing has found
+  at least one ~150 KB mutated PDF that exhausts ~2 GiB of RSS inside
+  pdfium's object-stream decoder; a per-parse timeout is the simplest
+  backstop. See [`fuzz/README.md`](fuzz/README.md) for the current
+  known-findings table.
 - **Run under a resource budget.** On Linux, wrap the process in
   `systemd-run --scope --property=MemoryMax=1G --property=CPUQuota=200%`
   or a seccomp-jailed sandbox. On macOS, use `launchd` limits.
@@ -62,5 +67,7 @@ documents, follow these practices:
 - **Run the fuzz harness** (`fuzz/README.md`) before exposing spdf to
   untrusted input paths in production.
 
-We plan to ship in-process timeout and memory guards before 1.0.
-Track progress under [issue label `hardening`](https://github.com/Fanaperana/spdf/issues?q=label%3Ahardening).
+We plan to land additional hardening (pdfium memory ceiling,
+deeper property-based tests for the projection algorithm, OSS-Fuzz
+integration) before 1.0. Track progress under
+[issue label `hardening`](https://github.com/Fanaperana/spdf/issues?q=label%3Ahardening).

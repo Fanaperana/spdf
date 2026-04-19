@@ -6,20 +6,37 @@ All notable changes to `spdf` land here. We follow
 
 ## [Unreleased]
 
+## [0.2.0-alpha.1] — 2026-04-18
+
+First pre-release on crates.io. **Not stable.** The public API surface
+can change until 0.2.0 proper.
+
 ### Added
-- **Benchmark corpus** — three public-domain PDFs under
-  [example/corpus/](example/corpus/) (IRS Form 1040, NIST SP 800-63B
-  excerpt, RFC 8446 excerpt) so the benchmark exercises real-world
-  form/prose/RFC layouts instead of just the 2 original fixtures.
+- **Benchmark corpus** — six public-domain PDFs under
+  [example/corpus/](example/corpus/): IRS Form 1040, NIST SP 800-63B
+  excerpt, RFC 8446 excerpt, Unicode 17.0 CJK Unified Ideographs chart
+  (first 2 pages), an AES-128–encrypted derivative, and a truncated
+  (malformed) derivative.
 - **Spatial-precision benchmark** (`benchmark/spatial.py`) that scores
   IoU and centroid error against raw-tesseract ground truth.
-- **Property tests** for `spdf-projection::project_page`: panic-freedom,
-  input-alphabet preservation, and stability under input shuffle.
-- **Fuzz harness** (`fuzz/`) with a `parse_pdf` cargo-fuzz target that
-  exercises `SpdfParser::parse(bytes)` with adversarial blobs.
-- **Windows CI** — `test` matrix now covers Ubuntu, macOS, and
-  Windows. A separate `msrv` job pins the minimum supported Rust
-  version (1.85) and a `rustdoc` job gates on doc warnings.
+- **Integration tests** for the resource guards
+  (`max_input_bytes` / `max_pages` / `timeout_secs`) and for the
+  adversarial fixtures (encrypted → `PasswordRequired`, malformed →
+  typed error, CJK → non-empty extraction).
+- **Property tests** for `spdf-projection::project_page`: panic-
+  freedom, input-alphabet preservation, and stability under input
+  shuffle.
+- **Fuzz harness** (`fuzz/`) with a `parse_pdf` cargo-fuzz target.
+  Ran ~9 CPU-minutes on the pre-0.2.0 codebase; surfaced one OOM
+  finding tracked in `fuzz/README.md`.
+- **Resource guards** on `ParseConfig`: `timeout_secs`,
+  `max_input_bytes`, `max_pages`.
+- **Windows CI** — `test` matrix covers Ubuntu, macOS, and Windows
+  (OCR feature skipped on Windows). A separate `msrv` job pins the
+  minimum supported Rust version (1.85) and a `rustdoc` job gates on
+  doc warnings.
+- **`docs.rs` metadata** on `spdf-pdf` so doc builds succeed without
+  network access; `build.rs` short-circuits on `DOCS_RS=1`.
 - `CHANGELOG.md`, `SECURITY.md` update, and a documented stability
   policy for the pre-1.0 API.
 

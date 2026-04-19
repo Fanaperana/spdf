@@ -69,6 +69,12 @@ struct ParseArgs {
     #[arg(long)]
     tessdata_path: Option<PathBuf>,
 
+    /// Retain very-small glyphs (<2 pt) in the projected text. Useful
+    /// for form PDFs whose field labels and checkbox numbers live
+    /// below the default filter threshold. Off by default.
+    #[arg(long = "preserve-small-text", default_value_t = false)]
+    preserve_small_text: bool,
+
     /// Max pages to process.
     #[arg(long, default_value_t = 10_000)]
     max_pages: u32,
@@ -235,6 +241,7 @@ fn run_parse(args: ParseArgs, quiet: bool) -> Result<()> {
     if let Some(p) = &args.tessdata_path {
         cfg.tessdata_path = Some(p.to_string_lossy().into_owned());
     }
+    cfg.preserve_very_small_text = args.preserve_small_text;
     if args.trace_grid || args.visualize_grid.is_some() {
         let mut debug = spdf_types::DebugConfig::default();
         debug.enabled = true;

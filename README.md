@@ -88,18 +88,24 @@ tokens are compared case-insensitively as a multiset.
 
 | fixture | engine | wall-clock | tokens | recall | precision | F1 |
 |---|---|---:|---:|---:|---:|---:|
-| irs-f1040.pdf | spdf | 271 ms | 1094 | 63.8% | 86.5% | 73.4% |
-| irs-f1040.pdf | **liteparse** | **466 ms** | **1575** | **81.8%** | **77.0%** | **79.4%** |
-| nist-sp-800-63b-p1-2.pdf | spdf | 788 ms | 222 | 93.5% | 96.8% | 95.1% |
-| nist-sp-800-63b-p1-2.pdf | **liteparse** | **4679 ms** | **226** | **95.2%** | **96.9%** | **96.1%** |
-| rfc8446-p1-2.pdf | **spdf** | **29 ms** | **399** | **99.5%** | **99.7%** | **99.6%** |
-| rfc8446-p1-2.pdf | liteparse | 358 ms | 399 | 99.5% | 99.7% | 99.6% |
-| example-1.jpg | **spdf** | **1041 ms** | **231** | **82.0%** | **96.5%** | **88.7%** |
-| example-1.jpg | liteparse | 6531 ms | 146 | 42.3% | 78.8% | 55.0% |
-| test-ocr.pdf | **spdf** | **266 ms** | **20** | **100.0%** | **100.0%** | **100.0%** |
-| test-ocr.pdf | liteparse | 2965 ms | 20 | 100.0% | 100.0% | 100.0% |
+| irs-f1040.pdf | spdf | 268 ms | 1094 | 63.8% | 86.5% | 73.4% |
+| irs-f1040.pdf | **liteparse** | **541 ms** | **1575** | **81.8%** | **77.0%** | **79.4%** |
+| irs-fw9-p1-2.pdf | spdf | 76 ms | 2253 | 99.1% | 98.4% | 98.7% |
+| irs-fw9-p1-2.pdf | **liteparse** | **465 ms** | **2253** | **99.1%** | **98.4%** | **98.8%** |
+| nist-sp-800-53r5-p1-2.pdf | spdf | 17 ms | 96 | 82.5% | 97.9% | 89.5% |
+| nist-sp-800-53r5-p1-2.pdf | **liteparse** | **461 ms** | **94** | **82.5%** | **100.0%** | **90.4%** |
+| nist-sp-800-63b-p1-2.pdf | spdf | 969 ms | 222 | 93.5% | 96.8% | 95.1% |
+| nist-sp-800-63b-p1-2.pdf | **liteparse** | **5530 ms** | **226** | **95.2%** | **96.9%** | **96.1%** |
+| rfc8446-p1-2.pdf | **spdf** | **20 ms** | **399** | **99.5%** | **99.7%** | **99.6%** |
+| rfc8446-p1-2.pdf | liteparse | 375 ms | 399 | 99.5% | 99.7% | 99.6% |
+| rfc9110-p1-2.pdf | **spdf** | **235 ms** | **8** | **0.0%** | **0.0%** | **0.0%** |
+| rfc9110-p1-2.pdf | liteparse | 3101 ms | 8 | 0.0% | 0.0% | 0.0% |
+| example-1.jpg | **spdf** | **1067 ms** | **231** | **82.0%** | **96.5%** | **88.7%** |
+| example-1.jpg | liteparse | 7070 ms | 146 | 42.3% | 78.8% | 55.0% |
+| test-ocr.pdf | **spdf** | **274 ms** | **20** | **100.0%** | **100.0%** | **100.0%** |
+| test-ocr.pdf | liteparse | 3212 ms | 20 | 100.0% | 100.0% | 100.0% |
 
-**Mean over fixtures:** spdf **F1 91.4%** in **479 ms**; liteparse F1 86.0% in 3000 ms.
+**Mean over fixtures:** spdf **F1 80.6%** in **366 ms**; liteparse F1 77.4% in 2594 ms.
 
 <!-- BENCHMARK:END -->
 
@@ -123,12 +129,18 @@ mean centroid error in PDF points.
 | test-ocr.pdf | **liteparse** | **4** | **0.957** | **100.0%** | **0.54 pt** |
 | irs-f1040.pdf | **spdf** | **115** | **0.476** | **55.7%** | **97.90 pt** |
 | irs-f1040.pdf | liteparse | 84 | 0.351 | 52.4% | 135.73 pt |
+| irs-fw9-p1-2.pdf | **spdf** | **29** | **0.517** | **58.6%** | **169.21 pt** |
+| irs-fw9-p1-2.pdf | liteparse | 28 | 0.348 | 53.6% | 175.61 pt |
+| nist-sp-800-53r5-p1-2.pdf | **spdf** | **3** | **0.964** | **100.0%** | **0.35 pt** |
+| nist-sp-800-53r5-p1-2.pdf | liteparse | 1 | 0.634 | 100.0% | 2.01 pt |
 | nist-sp-800-63b-p1-2.pdf | **spdf** | **14** | **0.678** | **78.6%** | **84.12 pt** |
 | nist-sp-800-63b-p1-2.pdf | liteparse | 20 | 0.471 | 65.0% | 103.50 pt |
 | rfc8446-p1-2.pdf | **spdf** | **1** | **0.869** | **100.0%** | **0.44 pt** |
 | rfc8446-p1-2.pdf | liteparse | 4 | 0.427 | 50.0% | 171.02 pt |
+| rfc9110-p1-2.pdf | **spdf** | **0** | **0.000** | **0.0%** | **0.00 pt** |
+| rfc9110-p1-2.pdf | liteparse | 0 | 0.000 | 0.0% | 0.00 pt |
 
-**Mean over fixtures:** spdf **mean IoU 0.790**, **86.4%** of matches ≥ 0.5, centroid error **37.52 pt**; liteparse 0.575 / 67.1% / 87.76 pt.
+**Mean over fixtures:** spdf **mean IoU 0.679**, **73.8%** of matches ≥ 0.5, centroid error **44.64 pt**; liteparse 0.482 / 61.1% / 77.05 pt.
 
 <!-- SPATIAL:END -->
 

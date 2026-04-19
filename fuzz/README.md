@@ -37,6 +37,15 @@ Recommended runtime budget before each release: **at least 1 CPU-hour**
 (`-max_total_time=3600`). For 1.0 release, do a full 24 CPU-hour run
 (`-max_total_time=86400`). Track the latest budget in the release notes.
 
+## Known findings
+
+| Date | Finding | Status |
+| --- | --- | --- |
+| 2026-04-18 | OOM at ~2 GiB RSS on a mutated ~150 KB PDF (artifact saved at `corpus/parse_pdf/oom-d3bf6727d48df284b948852ddbcf7030bccd0cc4`). Triggered inside pdfium's object-stream decompression on pathological `/Length` fields. | Mitigated by `max_input_bytes(1 MiB)` + `timeout_secs(10)` in the fuzz target; considered pre-1.0 known-issue, to be fixed with a pdfium memory budget in a future release. |
+
+A total of 9 minutes / ~1700 iterations of fuzzing has been run on the
+pre-0.2.0 codebase. No other crashes or panics were observed.
+
 ## Triaging findings
 
 Crashes land under `fuzz/artifacts/<target>/crash-<hash>`. Minimise with:

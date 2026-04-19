@@ -17,6 +17,8 @@ fuzz_target!(|data: &[u8]| {
     let parser = SpdfParser::builder()
         .ocr_enabled(false)
         .max_pages(8)
+        .max_input_bytes(1 << 20) // 1 MiB
+        .timeout_secs(10)
         .build();
 
     let _ = parser.parse(ParseInput::Bytes(data.to_vec()));

@@ -1,0 +1,312 @@
+rom W=9
+
+(Rev. March 2024)
+
+Department of the Treasury
+Internal Revenue Service
+
+Request for Taxpayer
+Identification Number and Certification
+
+Go to www.irs.gov/FormW9 for instructions and the latest information.
+
+Give form to the
+requester. Do not
+send to the IRS.
+
+Before you begin. For guidance related to the purpose of Form W-9, see Purpose of Form, below.
+
+entity's name on line 2.)
+
+1 Name of entity/individual. An entry is required. (For a sole proprietor or disregarded entity, enter the owner's name on line 1, and enter the business/disregarded
+
+2 Business name/disregarded entity name, if different from above.
+
+3a Check the appropriate box for federal tax classification of the entity/individual whose name is entered on line 1. Check
+only one of the following seven boxes.
+
+(J Individua/sole proprietor © [[] Ccorporation [_] Scorporation [_] Partnership  [_] Trust/estate
+
+(1 LLC. Enter the tax classification (C = C corporation, S = S corporation, P = Partnership)
+
+classification of the LLC, unless it is a disregarded entity. A disregarded entity should instead check the appropriate
+box for the tax classification of its owner.
+
+1 Other (see instructions)
+
+Note: Check the “LLC” box above and, in the entry space, enter the appropriate code (C, S, or P) for the tax
+
+4 Exemptions (codes apply only to
+certain entities, not individuals;
+see instructions on page 3):
+
+Exempt payee code (if any)
+
+Exemption from Foreign Account Tax
+Compliance Act (FATCA) reporting
+code (if any)
+
+Print or type.
+
+3b If on line 3a you checked “Partnership” or “Trust/estate,” or checked “LLC” and entered “P” as its tax classification,
+and you are providing this form to a partnership, trust, or estate in which you have an ownership interest, check
+this box if you have any foreign partners, owners, or beneficiaries. See instructions .
+
+Applies to accounts maintained
+outside the United States.)
+
+See Specific Instructions on page 3.
+
+5 Address (number, street, and apt. or suite no.). See instructions.
+
+6 City, state, and ZIP code
+
+Requester’s name and address (optional)
+
+7 List account number(s) here (optional)
+
+Taxpayer Identification Number (TIN)
+
+Enter your TIN in the appropriate box. The TIN provided must match the name given on line 1 to avoid
+
+[Social security number
+
+backup withholding. For individuals, this is generally your social security number (SSN). However, for a
+resident alien, sole proprietor, or disregarded entity, see the instructions for Part |, later. For other
+
+entities, it is your employer identification number (EIN). If you do not have a number, see How togeta Sr
+
+TIN, later.
+
+[Employer identification number
+
+Note: If the account is in more than one name, see the instructions for line 1. See also What Name and
+Number To Give the Requester for guidelines on whose number to enter.
+
+Part Certification
+
+Under penalties of perjury, | certify that:
+
+1. The number shown on this form is my correct taxpayer identification number (or | am waiting for a number to be issued to me); and
+2. Lam not subject to backup withholding because (a) | am exempt from backup withholding, or (b) | have not been notified by the Internal Revenue
+Service (IRS) that | am subject to backup withholding as a result of a failure to report all interest or dividends, or (c) the IRS has notified me that | am
+
+no longer subject to backup withholding; and
+3. lam a USS. citizen or other U.S. person (defined below); and
+4. The FATCA code(s) entered on this form (if any) indicating that | am exempt from FATCA reporting is correct.
+
+Certification instructions. You must cross out item 2 above if you have been notified by the IRS that you are currently subject to backup withholding
+because you have failed to report all interest and dividends on your tax return. For real estate transactions, item 2 does not apply. For mortgage interest paid,
+acquisition or abandonment of secured property, cancellation of debt, contributions to an individual retirement arrangement (IRA), and, generally, payments
+other than interest and dividends, you are not required to sign the certification, but you must provide your correct TIN. See the instructions for Part Il, later.
+
+Sign
+
+Signature of
+Here
+
+U.S. person Date
+
+General Instructions
+
+New line 3b has been added to this form. A flow-through entity is
+
+Section references are to the Internal Revenue Code unless otherwise
+noted.
+
+Future developments. For the latest information about developments
+related to Form W-9 and its instructions, such as legislation enacted
+after they were published, go to www.irs.gov/FormW9.
+
+What’s New
+
+Line 3a has been modified to clarify how a disregarded entity completes
+this line. An LLC that is a disregarded entity should check the
+appropriate box for the tax classification of its owner. Otherwise, it
+should check the “LLC” box and enter its appropriate tax classification.
+
+required to complete this line to indicate that it has direct or indirect
+foreign partners, owners, or beneficiaries when it provides the Form W-9
+to another flow-through entity in which it has an ownership interest. This
+change is intended to provide a flow-through entity with information
+regarding the status of its indirect foreign partners, owners, or
+beneficiaries, so that it can satisfy any applicable reporting
+requirements. For example, a partnership that has any indirect foreign
+partners may be required to complete Schedules K-2 and K-3. See the
+Partnership Instructions for Schedules K-2 and K-3 (Form 1065).
+
+Purpose of Form
+
+An individual or entity (Form W-9 requester) who is required to file an
+information return with the IRS is giving you this form because they
+
+Cat. No. 10231X
+
+Form W-9 (Rev. 3-2024)
+Form W-9 (Rev. 3-2024)
+
+Page 2
+
+must obtain your correct taxpayer identification number (TIN), which
+may be your social security number (SSN), individual taxpayer
+identification number (ITIN), adoption taxpayer identification number
+(ATIN), or employer identification number (EIN), to report on an
+information return the amount paid to you, or other amount reportable
+on an information return. Examples of information returns include, but
+are not limited to, the following.
+* Form 1099-INT (interest earned or paid).
+* Form 1099-DIV (dividends, including those from stocks or mutual
+funds).
+* Form 1099-MISC (various types of income, prizes, awards, or gross
+proceeds).
+* Form 1099-NEC (nonemployee compensation).
+* Form 1099-B (stock or mutual fund sales and certain other
+transactions by brokers).
++ Form 1099-S (proceeds from real estate transactions).
+* Form 1099-K (merchant card and third-party network transactions).
+* Form 1098 (home mortgage interest), 1098-E (student loan interest),
+and 1098-T (tuition).
+* Form 1099-C (canceled debt).
+* Form 1099-A (acquisition or abandonment of secured property).
+
+Use Form W-9 only if you are a U.S. person (including a resident
+alien), to provide your correct TIN.
+Caution: If you don’t return Form W-9 to the requester with a TIN, you
+might be subject to backup withholding. See What is backup
+withholding, later.
+
+By signing the filled-out form, you:
+
+1. Certify that the TIN you are giving is correct (or you are waiting for a
+number to be issued);
+
+2. Certify that you are not subject to backup withholding; or
+
+3. Claim exemption from backup withholding if you are a U.S. exempt
+payee; and
+
+4. Certify to your non-foreign status for purposes of withholding under
+chapter 3 or 4 of the Code (if applicable); and
+
+5. Certify that FATCA code(s) entered on this form (if any) indicating
+that you are exempt from the FATCA reporting is correct. See What Is
+FATCA Reporting, later, for further information.
+Note: If you are a U.S. person and a requester gives you a form other
+than Form W-9 to request your TIN, you must use the requester’s form if
+it is substantially similar to this Form W-9.
+Definition of a U.S. person. For federal tax purposes, you are
+considered a U.S. person if you are:
+* An individual who is a U.S. citizen or U.S. resident alien;
+* A partnership, corporation, company, or association created or
+organized in the United States or under the laws of the United States;
+* An estate (other than a foreign estate); or
+* A domestic trust (as defined in Regulations section 301.7701-7).
+Establishing U.S. status for purposes of chapter 3 and chapter 4
+withholding. Payments made to foreign persons, including certain
+distributions, allocations of income, or transfers of sales proceeds, may
+be subject to withholding under chapter 3 or chapter 4 of the Code
+(sections 1441-1474). Under those rules, if a Form W-9 or other
+Certification of non-foreign status has not been received, a withholding
+agent, transferee, or partnership (payor) generally applies presumption
+rules that may require the payor to withhold applicable tax from the
+recipient, owner, transferor, or partner (payee). See Pub. 515,
+Withholding of Tax on Nonresident Aliens and Foreign Entities.
+
+The following persons must provide Form W-9 to the payor for
+purposes of establishing its non-foreign status.
+* In the case of a disregarded entity with a U.S. owner, the U.S. owner
+of the disregarded entity and not the disregarded entity.
+* In the case of a grantor trust with a U.S. grantor or other U.S. owner,
+generally, the U.S. grantor or other U.S. owner of the grantor trust and
+not the grantor trust.
+* In the case of a U.S. trust (other than a grantor trust), the U.S. trust
+and not the beneficiaries of the trust.
+See Pub. 515 for more information on providing a Form W-9 or a
+certification of non-foreign status to avoid withholding.
+
+Foreign person. If you are a foreign person or the U.S. branch of a
+foreign bank that has elected to be treated as a U.S. person (under
+Regulations section 1.1441-1(b)(2)(iv) or other applicable section for
+chapter 3 or 4 purposes), do not use Form W-9. Instead, use the
+appropriate Form W-8 or Form 8233 (see Pub. 515). If you are a
+qualified foreign pension fund under Regulations section 1.897()-1(d), or
+a partnership that is wholly owned by qualified foreign pension funds,
+that is treated as a non-foreign person for purposes of section 1445
+withholding, do not use Form W-2. Instead, use Form W-8EXP (or other
+certification of non-foreign status).
+
+Nonresident alien who becomes a resident alien. Generally, only a
+nonresident alien individual may use the terms of a tax treaty to reduce
+or eliminate U.S. tax on certain types of income. However, most tax
+treaties contain a provision known as a saving clause. Exceptions
+specified in the saving clause may permit an exemption from tax to
+continue for certain types of income even after the payee has otherwise
+become a U.S. resident alien for tax purposes.
+
+If you are a U.S. resident alien who is relying on an exception
+contained in the saving clause of a tax treaty to claim an exemption
+from U.S. tax on certain types of income, you must attach a statement
+to Form W-9 that specifies the following five items.
+
+1. The treaty country. Generally, this must be the same treaty under
+which you claimed exemption from tax as a nonresident alien.
+
+2. The treaty article addressing the income.
+3. The article number (or location) in the tax treaty that contains the
+saving clause and its exceptions.
+
+4. The type and amount of income that qualifies for the exemption
+from tax.
+
+5. Sufficient facts to justify the exemption from tax under the terms of
+the treaty article.
+
+Example. Article 20 of the U.S.-China income tax treaty allows an
+exemption from tax for scholarship income received by a Chinese
+student temporarily present in the United States. Under U.S. law, this
+student will become a resident alien for tax purposes if their stay in the
+United States exceeds 5 calendar years. However, paragraph 2 of the
+first Protocol to the U.S.-China treaty (dated April 30, 1984) allows the
+provisions of Article 20 to continue to apply even after the Chinese
+student becomes a resident alien of the United States. A Chinese
+student who qualifies for this exception (under paragraph 2 of the first
+Protocol) and is relying on this exception to claim an exemption from tax
+on their scholarship or fellowship income would attach to Form W-9 a
+statement that includes the information described above to support that
+exemption.
+
+If you are a nonresident alien or a foreign entity, give the requester the
+appropriate completed Form W-8 or Form 8233.
+
+Backup Withholding
+
+What is backup withholding? Persons making certain payments to you
+must under certain conditions withhold and pay to the IRS 24% of such
+payments. This is called “backup withholding.” Payments that may be
+subject to backup withholding include, but are not limited to, interest,
+tax-exempt interest, dividends, broker and barter exchange
+transactions, rents, royalties, nonemployee pay, payments made in
+settlement of payment card and third-party network transactions, and
+certain payments from fishing boat operators. Real estate transactions
+are not subject to backup withholding.
+
+You will not be subject to backup withholding on payments you receive
+if you give the requester your correct TIN, make the proper certifications,
+and report all your taxable interest and dividends on your tax return.
+Payments you receive will be subject to backup withholding if:
+
+1. You do not furnish your TIN to the requester;
+
+2. You do not certify your TIN when required (see the instructions for
+Part II for details);
+
+3. The IRS tells the requester that you furnished an incorrect TIN;
+
+4. The IRS tells you that you are subject to backup withholding
+because you did not report all your interest and dividends on your tax
+return (for reportable interest and dividends only); or
+
+5. You do not certify to the requester that you are not subject to
+backup withholding, as described in item 4 under “By signing the filled-
+out form” above (for reportable interest and dividend accounts opened
+after 1983 only).

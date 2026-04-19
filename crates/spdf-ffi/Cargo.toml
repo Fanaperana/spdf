@@ -6,7 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "C-ABI bindings for spdf — consumable from Node, Python, Deno, Bun, etc."
+description = "C-ABI bindings for spdf — experimental, unstable ABI."
+publish = false
 
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]

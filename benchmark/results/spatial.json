@@ -88,6 +88,64 @@
       }
     },
     {
+      "fixture": "irs-fw9-p1-2.pdf",
+      "spdf": {
+        "truth_words": 895,
+        "engine_words": 133,
+        "matches": 29,
+        "precision": 0.21804511278195488,
+        "recall": 0.03240223463687151,
+        "f1": 0.05642023346303502,
+        "mean_iou": 0.5169792691581121,
+        "median_iou": 0.8174459642570009,
+        "mean_centroid_err_pt": 169.2109451074944,
+        "iou_ge_threshold_rate": 0.5862068965517241,
+        "iou_threshold": 0.5
+      },
+      "lite": {
+        "truth_words": 895,
+        "engine_words": 133,
+        "matches": 28,
+        "precision": 0.21052631578947367,
+        "recall": 0.03128491620111732,
+        "f1": 0.05447470817120623,
+        "mean_iou": 0.3480091281196923,
+        "median_iou": 0.546699019982684,
+        "mean_centroid_err_pt": 175.60618410997077,
+        "iou_ge_threshold_rate": 0.5357142857142857,
+        "iou_threshold": 0.5
+      }
+    },
+    {
+      "fixture": "nist-sp-800-53r5-p1-2.pdf",
+      "spdf": {
+        "truth_words": 38,
+        "engine_words": 14,
+        "matches": 3,
+        "precision": 0.21428571428571427,
+        "recall": 0.07894736842105263,
+        "f1": 0.11538461538461539,
+        "mean_iou": 0.9637909983903986,
+        "median_iou": 0.9628937643435436,
+        "mean_centroid_err_pt": 0.3491192099710136,
+        "iou_ge_threshold_rate": 1.0,
+        "iou_threshold": 0.5
+      },
+      "lite": {
+        "truth_words": 38,
+        "engine_words": 7,
+        "matches": 1,
+        "precision": 0.14285714285714285,
+        "recall": 0.02631578947368421,
+        "f1": 0.044444444444444446,
+        "mean_iou": 0.6340312077872252,
+        "median_iou": 0.6340312077872252,
+        "mean_centroid_err_pt": 2.008985059002308,
+        "iou_ge_threshold_rate": 1.0,
+        "iou_threshold": 0.5
+      }
+    },
+    {
       "fixture": "nist-sp-800-63b-p1-2.pdf",
       "spdf": {
         "truth_words": 154,
@@ -142,6 +200,35 @@
         "median_iou": 0.5484408398320364,
         "mean_centroid_err_pt": 171.01734921548226,
         "iou_ge_threshold_rate": 0.5,
+        "iou_threshold": 0.5
+      }
+    },
+    {
+      "fixture": "rfc9110-p1-2.pdf",
+      "spdf": {
+        "truth_words": 3,
+        "engine_words": 4,
+        "matches": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "mean_iou": 0.0,
+        "median_iou": 0.0,
+        "mean_centroid_err_pt": 0.0,
+        "iou_ge_threshold_rate": 0.0,
+        "iou_threshold": 0.5
+      },
+      "lite": {
+        "truth_words": 3,
+        "engine_words": 4,
+        "matches": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "mean_iou": 0.0,
+        "median_iou": 0.0,
+        "mean_centroid_err_pt": 0.0,
+        "iou_ge_threshold_rate": 0.0,
         "iou_threshold": 0.5
       }
     }
