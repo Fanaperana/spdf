@@ -53,7 +53,11 @@ use spdf_types::{OutputFormat, ParseConfig, ParseInput};
 ///   * `timeout_secs` (int) — abort if wall-clock exceeds this many seconds.
 #[pyfunction]
 #[pyo3(signature = (source, **kwargs))]
-fn parse(py: Python<'_>, source: &Bound<'_, PyAny>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<PyObject> {
+fn parse(
+    py: Python<'_>,
+    source: &Bound<'_, PyAny>,
+    kwargs: Option<&Bound<'_, PyDict>>,
+) -> PyResult<PyObject> {
     let mut config = ParseConfig::default();
     // Force JSON output — we always return a dict.
     config.output_format = OutputFormat::Json;

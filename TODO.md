@@ -59,12 +59,17 @@ mean wall-clock < 100 ms, benchmark snapshot committed.
 
 ## Tier 2 — pull further ahead where we already lead
 
-- [ ] **#T2.1 CID-font ToUnicode fallback (RFC 9110 fix).**
-      When a glyph has no ToUnicode map, render the glyph to a small
-      bitmap and route that single glyph to tesseract at ≥ 300 DPI.
-      Cache by `(font_id, cid)` so each unique glyph hits OCR once per
-      document. *Expected: RFC 9110 jumps 0 → ~95 %. Pure lead move;
-      liteparse also scores 0 %.*
+- [~] **#T2.1 CID-font ToUnicode fallback (RFC 9110 fix).** 🧊 Blocked on #T3.3.
+      Partial: the `is_cid_garbage_layer` detector already wipes pages
+      whose text layer is pure ligature noise (landed in `ff79fd3`) so
+      we no longer emit garbage tokens — precision is preserved.
+      **Full fix is blocked**: on the canonical RFC 9110 p.1 fixture
+      pdfium renders the *visible glyphs themselves* as "fi/fl/ffi"
+      ligatures, not just the ToUnicode map, so a render-then-OCR
+      fallback (tried 2026-04-19, reverted) yields nothing useful
+      while adding wall-clock. Liteparse scores 0 % here too. The
+      only real path is **#T3.3** (native content-stream parser +
+      Adobe Glyph List lookup) — do that before attempting again.
 - [ ] **#T2.2 ONNX OCR backend (PaddleOCR-v4 via `ort`).**
       Replace tesseract in hot path with a ~10 MB ONNX model. Keeps
       tesseract as fallback. *Expected: OCR wall-clock 10-30× faster,

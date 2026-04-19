@@ -132,6 +132,13 @@ impl SpdfParser {
         // tiny ligature-only vocabulary and the vocabulary is < 5
         // distinct tokens, we wipe the page's text layer. This is
         // strictly precision-positive: the tokens were never real.
+        //
+        // Note: we do NOT run the render-OCR fallback on these pages.
+        // On the canonical CID-garbage fixture (RFC 9110 p.1) pdfium
+        // also renders the glyphs as ligature shapes — the font's
+        // visible glyphs are subset-corrupt, not just its ToUnicode
+        // map — so OCRing the rendered page yields nothing either.
+        // A proper fix needs a native content-stream parser (#T3.3).
         for page in page_datas.iter_mut() {
             if is_cid_garbage_layer(&page.text_items) {
                 debug!(
