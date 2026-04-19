@@ -1,0 +1,48 @@
+FORM GST INV -1
+(See rule 138A)
+
+wework Generation of Invoice Reference Number
+
+[Account Short Code [Account Name [Location Name Primary Member Name
+IRN: [7806c2forle6e5b85c5 1fabsfecsd68c21bcc8dd00079e274769179d7bbec329|Date: [14/04/2022 10:21:25 AM
+invoice Number [2022041483393 Spaceman Reference Number
+Document Type Invoice Date of Document 14/04/2022
+Details of Supplier
+Legal Name [WeWork india Management Private Limited
+[esTIN [O6AADCH8710)1ZK
+Location [GURGAON
+laddress [SALCON PLATINA BUILDING, DLF SIKANDERPUR, SECTOR - 28, SIKANDERPUR SIKANDERPUR GURGAON 122001,
+Phone Number lo
+Email 1D |WE-IN-47843@wework.co.in
+Details of Reciplent(Billed to)
+Name Lumis Labs Investment Manager Pvt Ltd
+[csTIN JO6AAECL292311Z6
+laddress [TWO HORIZON CENTRE GOLF COURSE ROAD, DLF-5, SECTOR-43 GURGAON SIKANDERPUR GHOSI(68) 122002
+State (name and code) 6
+Place of Supply HARYANA
+Type of Supply - 828 Outward Supplies
+lattracts Reverse Charge False
+[Supplies made to SEZ False
+[Description OF Price per Period Period jos) Taxable IState or Union {Total Line
+SL.NO |Service poe Oty unit Start fend value PISCOUNE Halve —_|Central tax territory tax Integrated tax item Value
+Rate [Amt [Rate [Amt [Rate [amt
+Day Pass Bundle
+lat Two Horizon
+1 |Centre, Golf 1997212 |2.000 |2700.00 5400.00|810.00 4590.00 |9.0% 413.10 |9.0% |413.10 |0.0% |o.00 |s416.20
+Course Road - 5
+Day Passes
+Total o [4590.00 la13.10 [413.10 jo.00 [5416.20
+Total Invoice Value 5416.20
+Payment Details
+Company Name [WeWork india Management Private Limited
+UPIID Wework.in@icici
+[Account Number
+IFSC Code
+Payment Reference
+
+Terms of Payment: Due Upon Receipt
+If you have any questions regarding this Invoice, kindly raise a support request or email us at the above ID
+
+In case Lower Tax Deduction Certificate (LTDC) is provided to you please do not deduct TDS
+
+This is a system generated Invoice and does not require signature

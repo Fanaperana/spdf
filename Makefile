@@ -35,7 +35,7 @@ RELEASE_BIN := $(TARGET_DIR)/release/$(BIN)
 DEBUG_BIN   := $(TARGET_DIR)/debug/$(BIN)
 
 .PHONY: all build build-ocr debug install install-ocr uninstall test fmt lint clean run help \
-        pdfium-download deps-ocr
+        pdfium-download deps-ocr benchmark benchmark-update
 
 all: build
 
@@ -99,3 +99,9 @@ run: build ## Run release binary. Use ARGS="parse file.pdf --no-ocr"
 
 pdfium-download: ## Fetch pdfium via xtask (only needed when bundling is disabled)
 	$(CARGO) run -p xtask -- pdfium-download
+
+benchmark: ## Run full benchmark (spdf vs liteparse vs raw tesseract). Set LITEPARSE_DIR=
+	@bash benchmark/run.sh $(LITEPARSE_DIR)
+
+benchmark-update: benchmark ## Run benchmark and refresh README table
+	@python3 benchmark/update_readme.py

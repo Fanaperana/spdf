@@ -1,0 +1,51 @@
+        FORM GST INV -1 Dar a
+        (See rule 138A) HE
+Generation of Invoice Reference Number a
+        A
+
+
+                                                            HAR a
+
+ [account shortcode                       [accountName  iocatonName                                                      |
+                                                            |                                                            |
+                        fmwoice                             |oateotDocument                                              |
+                                                                                                                         |
+
+ sw                                                                                                              000000000
+                                                                                                                         |
+                        |SALCON PLATINABUILDING, DLF SIKANDERPUR, SECTOR - 28, SIKANDERPUR SIKANDERPUR GURGAON 122000    |
+                                                                                                                         |
+                                                        Details of Recipient(Biled
+ Name     ~~                                                                   to)
+                                                                                                                         |
+ [state (name and   code)     [TWO HORIZON CENTRE GOLF  COURSE ROAD,    GURGAON SKANDERPUR  12202                        |
+ [Attracts Reverse  Charge                              ~~ ~~~ ~~ ~~~
+ [supplies              fre     ~~ ~~~ ~~~
+                                                                                                                       ~~]
+
+       Description Of        Period                         |State or Union        otal Line
+
+
+     Day Pass Bundle
+     at Two Horizon
+  1  Golf           997212  2700.00                     4590.00        9.0% 413.10 0.0%
+     Course Road - 5
+ fot Day Passes                                             |     Jasao        | fooo  |
+ Jo
+
+
+
+
+ eo
+ [Account
+ |sccoge
+ ~~]
+
+ Terms of Payment: Due Upon
+ If you have any questions regarding this Invoice, kindly raise a support request or email us at the above ID
+
+
+ In case Lower Tax Deduction Certificate (LTDC) is provided to you please do not deduct TDS
+
+
+ This is a system generated Invoice and does not require signature
