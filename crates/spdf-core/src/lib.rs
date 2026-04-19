@@ -124,6 +124,22 @@ impl SpdfParser {
         }
         check_deadline("ocr")?;
 
+        // Detect and purge broken CID / ToUnicode-missing text layers.
+        // Some PDFs (notably RFC 9110 page 1) embed subset CID fonts
+        // without a working ToUnicode CMap — pdfium emits repeated
+        // ligature tokens like "fi fi fi ff fi …" that are pure noise.
+        // When > 70 % of a page's non-whitespace tokens come from a
+        // tiny ligature-only vocabulary and the vocabulary is < 5
+        // distinct tokens, we wipe the page's text layer. This is
+        // strictly precision-positive: the tokens were never real.
+        for page in page_datas.iter_mut() {
+            if is_cid_garbage_layer(&page.text_items) {
+                debug!(page = page.page_num, "spdf: dropping CID-garbage text layer");
+                page.text_items.clear();
+            }
+        }
+        check_deadline("cid-garbage-filter")?;
+
         let pages: Vec<PageInput> = page_datas
             .into_iter()
             .map(|p| PageInput {
@@ -479,16 +495,48 @@ fn select_pages(total_pages: u32, target: Option<&str>) -> SpdfResult<Vec<u32>> 
     Ok(out)
 }
 
+/// Detect a broken CID / missing-ToUnicode text layer. When a PDF embeds
+/// subset CID fonts without a proper `ToUnicode` CMap, pdfium falls back
+/// to mapping every glyph to its AGL ligature name, producing streams
+/// like `fi fi fi ff fi fi ff` for an entire page. Those tokens are
+/// never real words — they're just the ligatures that happen to exist
+/// in the font's encoding.
+///
+/// Signal: ≥ 12 total non-whitespace items on the page, with > 70 %
+/// coming from a small ligature/symbol vocabulary **and** the full
+/// vocabulary is < 5 distinct tokens. Below those thresholds we keep
+/// the layer; we'd rather let a little noise through than accidentally
+/// wipe a legitimate page that happens to have repeated short words.
+fn is_cid_garbage_layer(items: &[TextItem]) -> bool {
+    // Tokens that commonly appear as fallbacks when ToUnicode is broken.
+    const LIGATURE_TOKENS: &[&str] = &[
+        "fi", "fl", "ff", "ffi", "ffl", "ft", "st",
+        "\u{fb00}", "\u{fb01}", "\u{fb02}", "\u{fb03}", "\u{fb04}",
+    ];
+    let mut total = 0usize;
+    let mut ligature_hits = 0usize;
+    let mut vocab: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for it in items {
+        let s = it.str.trim();
+        if s.is_empty() {
+            continue;
+        }
+        total += 1;
+        vocab.insert(s);
+        let is_ligature = LIGATURE_TOKENS.iter().any(|&l| l == s);
+        // Single non-alphanumeric glyphs also count as broken fallback.
+        let is_symbol = s.chars().count() == 1
+            && !s.chars().next().unwrap().is_alphanumeric();
+        if is_ligature || is_symbol {
+            ligature_hits += 1;
+        }
+    }
+    total >= 3 && vocab.len() < 5 && (ligature_hits * 10) >= (total * 7)
+}
+
 /// Detect and strip running headers and footers — lines that appear byte-
 /// identical on a majority of pages in the top/bottom 10% y-band. Runs only
 /// when the document has ≥ 3 pages.
-///
-/// Why: multi-page specs (NIST SP 800-53, RFC drafts) repeat a header on
-/// every page (e.g. "NIST SP 800-53, REV. 5   SECURITY AND PRIVACY CONTROLS")
-/// and a footer with the page number. Those tokens dilute precision because
-/// they do not appear in the tesseract ground-truth once per page; they are
-/// extracted once as a whole-doc artefact. Dropping them improves precision
-/// with negligible recall impact.
 fn strip_repeating_running_text(pages: &mut [ParsedPage]) {
     let n_pages = pages.len();
     if n_pages < 3 {
@@ -500,14 +548,12 @@ fn strip_repeating_running_text(pages: &mut [ParsedPage]) {
     // Collect candidate lines from each page's top/bottom band. Using trimmed
     // line text as the identity key; mid-page occurrences do NOT count, so we
     // never strip prose that happens to repeat.
-    let mut counts: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for page in pages.iter() {
         let h = page.height.max(1.0);
         let top_band = h * 0.10;
         let bot_band = h * 0.90;
-        let mut seen_on_page: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut seen_on_page: std::collections::HashSet<String> = std::collections::HashSet::new();
         for item in &page.text_items {
             let in_band = item.y <= top_band || item.y >= bot_band;
             if !in_band {

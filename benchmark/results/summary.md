@@ -9,17 +9,17 @@ Token regex: `[A-Za-z0-9][A-Za-z0-9.\-/_@%'()]*`, case-insensitive multiset prec
 
 | fixture | engine | wall-clock | tokens | recall | precision | F1 |
 |---|---|---:|---:|---:|---:|---:|
-| irs-f1040.pdf | spdf | 269 ms | 1591 | 81.9% | 76.3% | 79.0% |
-| irs-fw9-p1-2.pdf | spdf | 70 ms | 2253 | 99.1% | 98.4% | 98.7% |
+| irs-f1040.pdf | spdf | 260 ms | 1591 | 81.9% | 76.3% | 79.0% |
+| irs-fw9-p1-2.pdf | spdf | 69 ms | 2253 | 99.1% | 98.4% | 98.7% |
 | nist-sp-800-53r5-p1-2.pdf | spdf | 15 ms | 96 | 82.5% | 97.9% | 89.5% |
-| nist-sp-800-63b-p1-2.pdf | spdf | 801 ms | 222 | 93.5% | 96.8% | 95.1% |
+| nist-sp-800-63b-p1-2.pdf | spdf | 812 ms | 222 | 93.5% | 96.8% | 95.1% |
 | rfc8446-p1-2.pdf | spdf | 19 ms | 399 | 99.5% | 99.7% | 99.6% |
-| rfc9110-p1-2.pdf | spdf | 217 ms | 8 | 0.0% | 0.0% | 0.0% |
-| example-1.jpg | spdf | 1037 ms | 231 | 82.0% | 96.5% | 88.7% |
-| test-ocr.pdf | spdf | 258 ms | 20 | 100.0% | 100.0% | 100.0% |
+| rfc9110-p1-2.pdf | spdf | 222 ms | 0 | 0.0% | 0.0% | 0.0% |
+| example-1.jpg | spdf | 1014 ms | 231 | 82.0% | 96.5% | 88.7% |
+| test-ocr.pdf | spdf | 265 ms | 20 | 100.0% | 100.0% | 100.0% |
 
 ## Mean over fixtures
 
 | engine | mean recall | mean precision | mean F1 | mean wall-clock |
 |---|---:|---:|---:|---:|
-| spdf      | 79.8% | 83.2% | 81.3% | 336 ms |
+| spdf      | 79.8% | 83.2% | 81.3% | 334 ms |

@@ -17,7 +17,7 @@ Matching: per ground-truth word, pick the engine word with the same text and max
 | nist-sp-800-53r5-p1-2.pdf | spdf | 14 | 3 | 11.5% | 0.964 | 0.963 | 100.0% | 0.35 pt |
 | nist-sp-800-63b-p1-2.pdf | spdf | 72 | 14 | 12.4% | 0.678 | 0.851 | 78.6% | 84.12 pt |
 | rfc8446-p1-2.pdf | spdf | 26 | 1 | 1.0% | 0.869 | 0.869 | 100.0% | 0.44 pt |
-| rfc9110-p1-2.pdf | spdf | 4 | 0 | 0.0% | 0.000 | 0.000 | 0.0% | 0.00 pt |
+| rfc9110-p1-2.pdf | spdf | 0 | 0 | 0.0% | 0.000 | 0.000 | 0.0% | 0.00 pt |
 
 ## Mean over fixtures
 

@@ -194,7 +194,7 @@
       "fixture": "rfc9110-p1-2.pdf",
       "spdf": {
         "truth_words": 3,
-        "engine_words": 4,
+        "engine_words": 0,
         "matches": 0,
         "precision": 0.0,
         "recall": 0.0,
@@ -207,7 +207,7 @@
       },
       "spdf_vs_pdftotext": {
         "truth_words": 4,
-        "engine_words": 4,
+        "engine_words": 0,
         "matches": 0,
         "precision": 0.0,
         "recall": 0.0,
