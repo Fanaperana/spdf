@@ -69,10 +69,12 @@ mean wall-clock < 100 ms, benchmark snapshot committed.
       Replace tesseract in hot path with a ~10 MB ONNX model. Keeps
       tesseract as fallback. *Expected: OCR wall-clock 10-30× faster,
       +3-5 pt F1 on noisy scans.*
-- [ ] **#T2.3 Table detection + `ParseResult::tables`.**
-      Cluster tokens by row/column gaps, emit structured rows alongside
-      plain text. Invoices, receipts, tax forms light up. Nothing in
-      this space does it well.
+- [x] **#T2.3 Table detection + `ParseResult::tables`.** ✅ Landed (opt-in).
+      Density-aware detector in `spdf-processing::tables`: clusters
+      horizontally-aligned rows with matching column signatures,
+      emits structured cells via `ParsedPage::tables`. Enable with
+      `ParseConfig::detect_tables = true` or `spdf parse --detect-tables`.
+      Off by default (zero cost for callers who don't need it).
 
 ---
 
