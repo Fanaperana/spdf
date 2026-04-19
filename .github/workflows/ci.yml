@@ -36,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -56,7 +56,43 @@ jobs:
           mkdir -p pdfium/aarch64-apple-darwin/lib
           curl -sSL -o pdfium.tgz https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-mac-arm64.tgz
           tar -xzf pdfium.tgz -C pdfium/aarch64-apple-darwin
-      - run: cargo test --workspace --exclude xtask
+      - name: Install pdfium (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path pdfium/x86_64-pc-windows-msvc/lib | Out-Null
+          Invoke-WebRequest -UseBasicParsing `
+            -Uri https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.tgz `
+            -OutFile pdfium.tgz
+          tar -xzf pdfium.tgz -C pdfium/x86_64-pc-windows-msvc
+      # OCR crate needs libtesseract/libleptonica headers which aren't trivial
+      # on Windows — skip it there and run the rest of the workspace.
+      - name: test (Windows, no OCR)
+        if: matrix.os == 'windows-latest'
+        run: cargo test --workspace --exclude xtask --exclude spdf-ocr
+      - name: test (Unix)
+        if: matrix.os != 'windows-latest'
+        run: cargo test --workspace --exclude xtask
+
+  msrv:
+    name: minimum supported Rust version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --exclude xtask --exclude spdf-ffi
+
+  docs:
+    name: rustdoc
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --workspace --no-deps --exclude xtask
 
   audit:
     name: cargo audit

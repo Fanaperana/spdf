@@ -6,7 +6,7 @@
 
 use spdf_types::{OcrData, TextItem};
 
-use crate::bbox::{ocr_overlaps_text, Rect};
+use crate::bbox::{Rect, ocr_overlaps_text};
 
 /// Detections below this confidence are dropped. Matches liteparse's
 /// `OCR_CONFIDENCE_THRESHOLD`.
@@ -127,6 +127,9 @@ mod tests {
             w: 10.0,
             h: 10.0,
         }];
-        assert_eq!(ocr_to_text_items(&ocr, OcrTransform::default(), &native).len(), 1);
+        assert_eq!(
+            ocr_to_text_items(&ocr, OcrTransform::default(), &native).len(),
+            1
+        );
     }
 }

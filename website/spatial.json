@@ -57,6 +57,93 @@
         "iou_ge_threshold_rate": 1.0,
         "iou_threshold": 0.5
       }
+    },
+    {
+      "fixture": "irs-f1040.pdf",
+      "spdf": {
+        "truth_words": 710,
+        "engine_words": 773,
+        "matches": 115,
+        "precision": 0.14877102199223805,
+        "recall": 0.1619718309859155,
+        "f1": 0.15509103169251517,
+        "mean_iou": 0.47590238466663315,
+        "median_iou": 0.7935865899497584,
+        "mean_centroid_err_pt": 97.89796801516867,
+        "iou_ge_threshold_rate": 0.5565217391304348,
+        "iou_threshold": 0.5
+      },
+      "lite": {
+        "truth_words": 710,
+        "engine_words": 281,
+        "matches": 84,
+        "precision": 0.298932384341637,
+        "recall": 0.11830985915492957,
+        "f1": 0.1695257315842583,
+        "mean_iou": 0.3514068762607198,
+        "median_iou": 0.5524688687039141,
+        "mean_centroid_err_pt": 135.73296957764342,
+        "iou_ge_threshold_rate": 0.5238095238095238,
+        "iou_threshold": 0.5
+      }
+    },
+    {
+      "fixture": "nist-sp-800-63b-p1-2.pdf",
+      "spdf": {
+        "truth_words": 154,
+        "engine_words": 72,
+        "matches": 14,
+        "precision": 0.19444444444444445,
+        "recall": 0.09090909090909091,
+        "f1": 0.12389380530973451,
+        "mean_iou": 0.6783220876991745,
+        "median_iou": 0.8513270268308099,
+        "mean_centroid_err_pt": 84.1167367348478,
+        "iou_ge_threshold_rate": 0.7857142857142857,
+        "iou_threshold": 0.5
+      },
+      "lite": {
+        "truth_words": 154,
+        "engine_words": 56,
+        "matches": 20,
+        "precision": 0.35714285714285715,
+        "recall": 0.12987012987012986,
+        "f1": 0.19047619047619047,
+        "mean_iou": 0.4708585389888109,
+        "median_iou": 0.6218148859039614,
+        "mean_centroid_err_pt": 103.50359335970761,
+        "iou_ge_threshold_rate": 0.65,
+        "iou_threshold": 0.5
+      }
+    },
+    {
+      "fixture": "rfc8446-p1-2.pdf",
+      "spdf": {
+        "truth_words": 181,
+        "engine_words": 26,
+        "matches": 1,
+        "precision": 0.038461538461538464,
+        "recall": 0.0055248618784530384,
+        "f1": 0.00966183574879227,
+        "mean_iou": 0.8687801066022451,
+        "median_iou": 0.8687801066022451,
+        "mean_centroid_err_pt": 0.44321489974716993,
+        "iou_ge_threshold_rate": 1.0,
+        "iou_threshold": 0.5
+      },
+      "lite": {
+        "truth_words": 181,
+        "engine_words": 36,
+        "matches": 4,
+        "precision": 0.1111111111111111,
+        "recall": 0.022099447513812154,
+        "f1": 0.03686635944700461,
+        "mean_iou": 0.4270673218839643,
+        "median_iou": 0.5484408398320364,
+        "mean_centroid_err_pt": 171.01734921548226,
+        "iou_ge_threshold_rate": 0.5,
+        "iou_threshold": 0.5
+      }
     }
   ]
 }

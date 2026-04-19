@@ -83,14 +83,8 @@ pub fn search_items(items: &[JsonTextItem], opts: SearchItemsOptions<'_>) -> Vec
         }
 
         let matched = &items[s..=end];
-        let x = matched
-            .iter()
-            .map(|m| m.x)
-            .fold(f64::INFINITY, f64::min);
-        let y = matched
-            .iter()
-            .map(|m| m.y)
-            .fold(f64::INFINITY, f64::min);
+        let x = matched.iter().map(|m| m.x).fold(f64::INFINITY, f64::min);
+        let y = matched.iter().map(|m| m.y).fold(f64::INFINITY, f64::min);
         let x2 = matched
             .iter()
             .map(|m| m.x + m.width)

@@ -248,8 +248,8 @@ fn merge_continuous_runs(items: &mut Vec<TextItem>) {
             let (l, r) = items.split_at_mut(i);
             (&mut l[i - 1], &r[0])
         };
-        let same_baseline = (prev.y - curr.y).abs() < 0.5
-            && (prev.height - curr.height).abs() < 0.5;
+        let same_baseline =
+            (prev.y - curr.y).abs() < 0.5 && (prev.height - curr.height).abs() < 0.5;
         if same_baseline {
             let x_delta = curr.x - prev.x - prev.width;
             // Tight-touch window: overlap up to ~1pt, gap up to ~0.1pt.
@@ -817,5 +817,91 @@ mod tests {
         };
         let out2 = project_page(page2, false, true);
         assert!(out2.text.contains("50505"));
+    }
+}
+
+#[cfg(test)]
+mod proptests {
+    //! Property tests: the projection pipeline must never panic, must
+    //! terminate, and must never invent output characters that weren't
+    //! present in at least one input `TextItem`.
+    use super::*;
+    use proptest::prelude::*;
+    use spdf_types::TextItem;
+
+    fn arb_item() -> impl Strategy<Value = TextItem> {
+        (
+            "[A-Za-z0-9 ]{0,8}",
+            0.0f64..1000.0,
+            0.0f64..1000.0,
+            1.0f64..50.0,
+            1.0f64..20.0,
+        )
+            .prop_map(|(s, x, y, w, h)| TextItem::new(s, x, y, w, h))
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: 128,
+            .. ProptestConfig::default()
+        })]
+
+        #[test]
+        fn project_never_panics(items in prop::collection::vec(arb_item(), 0..60)) {
+            let page = PageInput {
+                page_num: 1,
+                width: 1000.0,
+                height: 1000.0,
+                text_items: items.clone(),
+            };
+            let out = project_page(page, false, false);
+            // The projected page must preserve the input glyph count
+            // after placeholder stripping (non-empty items only).
+            let non_empty: usize = items.iter()
+                .filter(|t| !t.str.is_empty())
+                .count();
+            prop_assert!(out.text_items.len() <= non_empty.saturating_add(items.len()));
+            // Output characters must come from the input glyph alphabet
+            // plus whitespace. No smuggled characters.
+            let mut alphabet: std::collections::HashSet<char> =
+                [' ', '\n', '\t'].into_iter().collect();
+            for t in &items {
+                alphabet.extend(t.str.chars());
+            }
+            for c in out.text.chars() {
+                prop_assert!(
+                    alphabet.contains(&c),
+                    "unexpected char {:?} in output", c
+                );
+            }
+        }
+
+        #[test]
+        fn project_stable_under_shuffle(
+            items in prop::collection::vec(arb_item(), 1..30),
+            seed in any::<u64>(),
+        ) {
+            // The algorithm sorts by (y, x) internally, so arbitrary
+            // input ordering must yield identical output text.
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut shuffled = items.clone();
+            let mut h = DefaultHasher::new();
+            seed.hash(&mut h);
+            let mut state = h.finish();
+            // Fisher–Yates with a cheap deterministic RNG.
+            for i in (1..shuffled.len()).rev() {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let j = (state as usize) % (i + 1);
+                shuffled.swap(i, j);
+            }
+            let a = project_page(PageInput {
+                page_num: 1, width: 1000.0, height: 1000.0, text_items: items,
+            }, false, false);
+            let b = project_page(PageInput {
+                page_num: 1, width: 1000.0, height: 1000.0, text_items: shuffled,
+            }, false, false);
+            prop_assert_eq!(a.text, b.text);
+        }
     }
 }

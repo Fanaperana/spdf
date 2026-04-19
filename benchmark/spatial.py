@@ -108,9 +108,14 @@ def find_fixtures() -> list[Path]:
     skip = load_ignore()
     exts = {".pdf", ".jpg", ".jpeg", ".png"}
     out: list[Path] = []
-    for p in sorted(EXAMPLE.iterdir()):
-        if p.is_file() and p.suffix.lower() in exts and p.name not in skip:
-            out.append(p)
+    roots = [EXAMPLE]
+    corpus = EXAMPLE / "corpus"
+    if corpus.is_dir():
+        roots.append(corpus)
+    for root in roots:
+        for p in sorted(root.iterdir()):
+            if p.is_file() and p.suffix.lower() in exts and p.name not in skip:
+                out.append(p)
     return out
 
 

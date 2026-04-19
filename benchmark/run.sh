@@ -34,9 +34,14 @@ should_skip() {
     [ -f "$IGNORE_FILE" ] || return 1
     grep -Fxq -- "$base" "$IGNORE_FILE"
 }
-mapfile -t ALL_FIXTURES < <(find "$FIXTURES_DIR" -maxdepth 1 -type f \
-    \( -iname '*.pdf' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) \
-    | sort)
+mapfile -t ALL_FIXTURES < <({
+    find "$FIXTURES_DIR" -maxdepth 1 -type f \
+        \( -iname '*.pdf' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \)
+    if [ -d "$FIXTURES_DIR/corpus" ]; then
+        find "$FIXTURES_DIR/corpus" -maxdepth 1 -type f \
+            \( -iname '*.pdf' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \)
+    fi
+} | sort)
 FIXTURES=()
 for f in "${ALL_FIXTURES[@]}"; do
     if should_skip "$(basename "$f")"; then

@@ -29,7 +29,7 @@
 
 #![warn(clippy::all)]
 
-use std::ffi::{c_char, c_int, CStr, CString};
+use std::ffi::{CStr, CString, c_char, c_int};
 use std::path::PathBuf;
 use std::slice;
 
@@ -139,10 +139,7 @@ fn parse_opts(opts_json: *const c_char) -> Result<ParseConfig, String> {
     Ok(cfg)
 }
 
-fn write_ok_json(
-    out: *mut *mut c_char,
-    result: &spdf_types::ParseResult,
-) -> c_int {
+fn write_ok_json(out: *mut *mut c_char, result: &spdf_types::ParseResult) -> c_int {
     let json = result
         .json
         .clone()

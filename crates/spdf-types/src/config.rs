@@ -91,6 +91,16 @@ pub struct ParseConfig {
     pub preserve_layout_alignment_across_pages: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
+    /// Fail `parse()` with [`SpdfError::InvalidInput`] once wall-clock
+    /// work exceeds this many seconds. `None` = no deadline. Intended
+    /// as a defensive guard against pathological adversarial PDFs;
+    /// legitimate documents should never hit this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+    /// Hard cap on the size of an input blob accepted by `parse`. `None`
+    /// = no cap. Paths are not checked; only `ParseInput::Bytes`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_input_bytes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub debug: Option<DebugConfig>,
 }
@@ -111,6 +121,8 @@ impl Default for ParseConfig {
             preserve_very_small_text: false,
             preserve_layout_alignment_across_pages: false,
             password: None,
+            timeout_secs: None,
+            max_input_bytes: None,
             debug: None,
         }
     }

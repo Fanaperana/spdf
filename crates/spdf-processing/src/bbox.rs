@@ -101,29 +101,69 @@ mod tests {
 
     #[test]
     fn overlap_area_disjoint_is_zero() {
-        let a = Rect { x: 0.0, y: 0.0, w: 10.0, h: 10.0 };
-        let b = Rect { x: 20.0, y: 20.0, w: 5.0, h: 5.0 };
+        let a = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 10.0,
+            h: 10.0,
+        };
+        let b = Rect {
+            x: 20.0,
+            y: 20.0,
+            w: 5.0,
+            h: 5.0,
+        };
         assert_eq!(overlap_area(a, b), 0.0);
     }
 
     #[test]
     fn overlap_area_partial() {
-        let a = Rect { x: 0.0, y: 0.0, w: 10.0, h: 10.0 };
-        let b = Rect { x: 5.0, y: 5.0, w: 10.0, h: 10.0 };
+        let a = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 10.0,
+            h: 10.0,
+        };
+        let b = Rect {
+            x: 5.0,
+            y: 5.0,
+            w: 10.0,
+            h: 10.0,
+        };
         assert_eq!(overlap_area(a, b), 25.0);
     }
 
     #[test]
     fn ocr_overlaps_text_rejects_duplicate() {
-        let native = Rect { x: 0.0, y: 0.0, w: 10.0, h: 10.0 };
-        let ocr = Rect { x: 0.0, y: 0.0, w: 10.0, h: 10.0 };
+        let native = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 10.0,
+            h: 10.0,
+        };
+        let ocr = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 10.0,
+            h: 10.0,
+        };
         assert!(ocr_overlaps_text(ocr, &[native]));
     }
 
     #[test]
     fn ocr_overlaps_text_allows_independent_region() {
-        let native = Rect { x: 0.0, y: 0.0, w: 10.0, h: 10.0 };
-        let ocr = Rect { x: 100.0, y: 100.0, w: 10.0, h: 10.0 };
+        let native = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 10.0,
+            h: 10.0,
+        };
+        let ocr = Rect {
+            x: 100.0,
+            y: 100.0,
+            w: 10.0,
+            h: 10.0,
+        };
         assert!(!ocr_overlaps_text(ocr, &[native]));
     }
 }

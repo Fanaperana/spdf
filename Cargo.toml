@@ -15,15 +15,17 @@ members = [
 ]
 # spdf-node (napi-rs) is opt-in; excluded from default builds because it
 # requires a Node toolchain. Build it explicitly with --manifest-path.
-exclude = ["crates/spdf-node"]
+# fuzz/ is managed by cargo-fuzz and opts itself out of the workspace,
+# but we list it here for explicit exclusion too.
+exclude = ["crates/spdf-node", "fuzz"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
-repository = "https://github.com/run-llama/liteparse"
-authors = ["LlamaIndex"]
+repository = "https://github.com/Fanaperana/spdf"
+authors = ["spdf contributors"]
 
 [workspace.dependencies]
 # Internal crates

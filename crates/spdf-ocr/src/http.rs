@@ -59,7 +59,11 @@ impl OcrEngine for HttpOcrEngine {
     fn recognize(&self, image: &[u8], options: &OcrOptions) -> SpdfResult<Vec<OcrResult>> {
         let url = self.url.clone();
         let client = self.client.clone();
-        let language = options.languages.first().cloned().unwrap_or_else(|| "en".into());
+        let language = options
+            .languages
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "en".into());
         let image = image.to_vec();
 
         rt()?.block_on(async move {

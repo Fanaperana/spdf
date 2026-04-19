@@ -88,12 +88,18 @@ tokens are compared case-insensitively as a multiset.
 
 | fixture | engine | wall-clock | tokens | recall | precision | F1 |
 |---|---|---:|---:|---:|---:|---:|
-| example-1.jpg | **spdf** | **1018 ms** | **231** | **82.0%** | **96.5%** | **88.7%** |
-| example-1.jpg | liteparse | 6346 ms | 146 | 42.3% | 78.8% | 55.0% |
-| test-ocr.pdf | **spdf** | **252 ms** | **20** | **100.0%** | **100.0%** | **100.0%** |
-| test-ocr.pdf | liteparse | 2860 ms | 20 | 100.0% | 100.0% | 100.0% |
+| irs-f1040.pdf | spdf | 271 ms | 1094 | 63.8% | 86.5% | 73.4% |
+| irs-f1040.pdf | **liteparse** | **466 ms** | **1575** | **81.8%** | **77.0%** | **79.4%** |
+| nist-sp-800-63b-p1-2.pdf | spdf | 788 ms | 222 | 93.5% | 96.8% | 95.1% |
+| nist-sp-800-63b-p1-2.pdf | **liteparse** | **4679 ms** | **226** | **95.2%** | **96.9%** | **96.1%** |
+| rfc8446-p1-2.pdf | **spdf** | **29 ms** | **399** | **99.5%** | **99.7%** | **99.6%** |
+| rfc8446-p1-2.pdf | liteparse | 358 ms | 399 | 99.5% | 99.7% | 99.6% |
+| example-1.jpg | **spdf** | **1041 ms** | **231** | **82.0%** | **96.5%** | **88.7%** |
+| example-1.jpg | liteparse | 6531 ms | 146 | 42.3% | 78.8% | 55.0% |
+| test-ocr.pdf | **spdf** | **266 ms** | **20** | **100.0%** | **100.0%** | **100.0%** |
+| test-ocr.pdf | liteparse | 2965 ms | 20 | 100.0% | 100.0% | 100.0% |
 
-**Mean over fixtures:** spdf **F1 94.3%** in **635 ms**; liteparse F1 77.5% in 4603 ms.
+**Mean over fixtures:** spdf **F1 91.4%** in **479 ms**; liteparse F1 86.0% in 3000 ms.
 
 <!-- BENCHMARK:END -->
 
@@ -115,8 +121,14 @@ mean centroid error in PDF points.
 | example-1.jpg | liteparse | 109 | 0.667 | 67.9% | 28.03 pt |
 | test-ocr.pdf | spdf | 5 | 0.952 | 100.0% | 0.64 pt |
 | test-ocr.pdf | **liteparse** | **4** | **0.957** | **100.0%** | **0.54 pt** |
+| irs-f1040.pdf | **spdf** | **115** | **0.476** | **55.7%** | **97.90 pt** |
+| irs-f1040.pdf | liteparse | 84 | 0.351 | 52.4% | 135.73 pt |
+| nist-sp-800-63b-p1-2.pdf | **spdf** | **14** | **0.678** | **78.6%** | **84.12 pt** |
+| nist-sp-800-63b-p1-2.pdf | liteparse | 20 | 0.471 | 65.0% | 103.50 pt |
+| rfc8446-p1-2.pdf | **spdf** | **1** | **0.869** | **100.0%** | **0.44 pt** |
+| rfc8446-p1-2.pdf | liteparse | 4 | 0.427 | 50.0% | 171.02 pt |
 
-**Mean over fixtures:** spdf **mean IoU 0.964**, **98.8%** of matches ≥ 0.5, centroid error **2.57 pt**; liteparse 0.812 / 83.9% / 14.28 pt.
+**Mean over fixtures:** spdf **mean IoU 0.790**, **86.4%** of matches ≥ 0.5, centroid error **37.52 pt**; liteparse 0.575 / 67.1% / 87.76 pt.
 
 <!-- SPATIAL:END -->
 
@@ -127,6 +139,40 @@ so the numbers are auditable. Reproduce on your own machine:
 make build-ocr   # or `make install-ocr`
 LITEPARSE_DIR=/path/to/liteparse make benchmark-update
 ```
+
+## Production-readiness
+
+spdf is pre-1.0. The table below tracks what we've hardened so you can
+decide whether it fits your threat model; see [CHANGELOG.md](CHANGELOG.md)
+for per-release detail.
+
+| Area | Status |
+| --- | --- |
+| JSON output schema (byte-compatible with LiteParse) | stable (covered by parity harness) |
+| Typed error enum at the public API (`SpdfError`) | stable |
+| Benchmark corpus (public-domain: IRS, NIST, RFC, scanned image) | 5 fixtures in [example/](example/) |
+| Property tests (`cargo test -p spdf-projection proptests`) | panic-freedom + shuffle-stability |
+| Fuzz harness (`cargo +nightly fuzz run parse_pdf`) | [fuzz/](fuzz/) — run before exposing to untrusted input |
+| Cross-platform CI | Linux + macOS + Windows; MSRV 1.85; rustdoc warnings gated |
+| Resource guards (`timeout_secs`, `max_input_bytes`, `max_pages`) | available via [`SpdfParser::builder`](crates/spdf-core/src/lib.rs) |
+| Security policy | see [SECURITY.md](SECURITY.md) |
+| CLI / Rust library API | best-effort stable, breaks noted in [CHANGELOG.md](CHANGELOG.md) |
+| `spdf-ffi` C ABI | **unstable** — symbols may change across 0.x releases |
+| crates.io / npm publication | not yet; install from source |
+
+**Recommended posture** when parsing untrusted PDFs today:
+
+```rust
+let parser = SpdfParser::builder()
+    .timeout_secs(30)           // defensive deadline
+    .max_input_bytes(50 << 20)  // 50 MiB input cap
+    .max_pages(500)             // reject page-tree bombs
+    .build();
+```
+
+Then wrap the process in a resource-capped sandbox (`systemd-run
+--property=MemoryMax=1G`, Firejail, Docker `--memory=`). Follow the
+full hardening checklist in [SECURITY.md](SECURITY.md).
 
 ## Install
 

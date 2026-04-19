@@ -59,7 +59,9 @@ pub fn convert_path_to_pdf(path: &Path, password: Option<&str>) -> SpdfResult<Co
         )));
     }
 
-    let ext = guess_extension(path).unwrap_or_default().to_ascii_lowercase();
+    let ext = guess_extension(path)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
 
     if ext == "pdf" {
         return Ok(ConversionResult::Pdf {
@@ -423,4 +425,3 @@ mod tests {
         }
     }
 }
-

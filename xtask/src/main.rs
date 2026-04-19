@@ -10,7 +10,7 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -187,7 +187,10 @@ fn run_parity(corpus: &Path, lit_bin: &str, spdf_bin: &str) -> Result<()> {
 
     let mut total = 0usize;
     let mut matched = 0usize;
-    println!("{:<40}  {:>10}  {:>10}  {:>6}", "file", "lit_chars", "spdf_chars", "%match");
+    println!(
+        "{:<40}  {:>10}  {:>10}  {:>6}",
+        "file", "lit_chars", "spdf_chars", "%match"
+    );
 
     for pdf in pdfs {
         total += 1;

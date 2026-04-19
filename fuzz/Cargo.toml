@@ -1,0 +1,22 @@
+[package]
+name = "spdf-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+spdf-core = { path = "../crates/spdf-core" }
+spdf-types = { path = "../crates/spdf-types" }
+
+[[bin]]
+name = "parse_pdf"
+path = "fuzz_targets/parse_pdf.rs"
+test = false
+doc = false
+
+# Opt out of the cargo workspace so `cargo fuzz` manages this crate on its own.
+[workspace]

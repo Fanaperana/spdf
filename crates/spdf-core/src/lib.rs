@@ -62,11 +62,35 @@ impl SpdfParser {
     }
 
     fn parse_inner(&self, input: ParseInput) -> SpdfResult<ParseResult> {
+        let deadline = self
+            .config
+            .timeout_secs
+            .map(|s| std::time::Instant::now() + std::time::Duration::from_secs(s));
+        let check_deadline = |stage: &str| -> SpdfResult<()> {
+            if let Some(d) = deadline {
+                if std::time::Instant::now() >= d {
+                    return Err(SpdfError::InvalidInput(format!(
+                        "spdf: timeout exceeded during {stage}"
+                    )));
+                }
+            }
+            Ok(())
+        };
+        // Reject oversized in-memory blobs before touching pdfium.
+        if let (ParseInput::Bytes(b), Some(cap)) = (&input, self.config.max_input_bytes) {
+            if b.len() as u64 > cap {
+                return Err(SpdfError::InvalidInput(format!(
+                    "spdf: input {} bytes exceeds max_input_bytes {cap}",
+                    b.len()
+                )));
+            }
+        }
         let materialised = self.materialise(input)?;
         let bytes = match materialised {
             Materialised::Pdf { bytes, .. } => bytes,
             Materialised::PlainText(content) => return Ok(plain_text_result(content)),
         };
+        check_deadline("load")?;
 
         let doc = self
             .pdf_engine
@@ -86,6 +110,7 @@ impl SpdfParser {
             .par_iter()
             .map(|&page_num| pdf_engine.extract_page(&doc, page_num, opts))
             .collect::<SpdfResult<Vec<_>>>()?;
+        check_deadline("extract")?;
 
         // Phase 6: Selective OCR. Run on pages with sparse text or embedded
         // images, then append non-overlapping OCR items to `text_items` so the
@@ -97,6 +122,7 @@ impl SpdfParser {
                 warn_no_ocr_engine();
             }
         }
+        check_deadline("ocr")?;
 
         let pages: Vec<PageInput> = page_datas
             .into_iter()
@@ -487,6 +513,16 @@ impl ParseConfigBuilder {
     }
     pub fn precise_bounding_box(mut self, on: bool) -> Self {
         self.config.precise_bounding_box = on;
+        self
+    }
+    /// Fail `parse()` if wall-clock work exceeds this many seconds.
+    pub fn timeout_secs(mut self, secs: u64) -> Self {
+        self.config.timeout_secs = Some(secs);
+        self
+    }
+    /// Reject `ParseInput::Bytes` payloads larger than this many bytes.
+    pub fn max_input_bytes(mut self, bytes: u64) -> Self {
+        self.config.max_input_bytes = Some(bytes);
         self
     }
     pub fn config(self) -> ParseConfig {
