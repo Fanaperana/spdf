@@ -15,12 +15,33 @@ rustup toolchain install nightly   # libFuzzer needs nightly
 ## Run a target
 
 ```sh
-cargo +nightly fuzz run parse_pdf -- -max_total_time=300
+cargo +nightly fuzz run parse_pdf     -- -max_total_time=300
+cargo +nightly fuzz run project_grid  -- -max_total_time=300
 ```
 
-The harness seeds a `SpdfParser` with OCR disabled and `max_pages=8`,
+Two harnesses are defined:
+
+| Target          | What it fuzzes                                  | Needs pdfium? |
+| --------------- | ----------------------------------------------- | ------------- |
+| `parse_pdf`     | Public `SpdfParser::parse(bytes)` on PDF blobs  | yes           |
+| `project_grid`  | `project_pages_to_grid` + `detect_tables` on synthetic `TextItem` vectors — pure-Rust, no pdfium | no |
+
+`parse_pdf` seeds a `SpdfParser` with OCR disabled and `max_pages=8`,
 caps each input at 512 KiB, and calls `parse(ParseInput::Bytes(…))`.
 Any panic / timeout / out-of-memory counts as a finding.
+
+`project_grid` uses a coverage-guided `Arbitrary` impl over `TextItem`
+fields so every branch of the clustering / grid / header-footer /
+table pipeline gets exercised. Rejects inputs with > 4096 items or
+> 16 pages so libfuzzer spends its budget on structurally-interesting
+cases.
+
+## Continuous fuzzing in CI
+
+`.github/workflows/fuzz.yml` runs both targets on every PR
+(2 min each), every push to `main` (5 min each), and on a nightly
+schedule (1 h each per target). Crash artifacts are uploaded as a
+build artifact if any harness fails.
 
 ## Corpus
 

@@ -101,7 +101,12 @@ mean wall-clock < 100 ms, benchmark snapshot committed.
 
 - [ ] **#T4.1 Windows prebuilt binary** (issue #2, needs Win host)
 - [ ] **#T4.2 macOS prebuilt binaries** (issue #1, needs Mac host)
-- [ ] **#T4.3 OSS-Fuzz onboarding** (issue #4) — continuous-fuzz badge
+- [x] **#T4.3 Continuous fuzzing in CI** — `.github/workflows/fuzz.yml`
+      runs `parse_pdf` (end-to-end) and `project_grid` (pure-Rust
+      projection + tables) on every PR (2 min each), every `main`
+      push (5 min each), and nightly (1 h each per target). Crash
+      artifacts uploaded on failure. Upstream OSS-Fuzz onboarding
+      (google/oss-fuzz PR) is still pending.
 - [x] **#T4.4 Python bindings via PyO3** — `spdf` Python module via maturin (crates/spdf-py)
 - [ ] **#T4.5 WASM build + live web demo** — drop-a-PDF page on the
       existing [website/](website/)

@@ -1,0 +1,78 @@
+name: Fuzz
+
+on:
+  # Short per-PR sanity runs — plenty to catch regressions on the
+  # pure-Rust projection / tables path. Full multi-hour campaigns
+  # happen on main + the nightly schedule below.
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Every night at 03:17 UTC, run a longer campaign on main.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      fuzz_seconds:
+        description: "Seconds to fuzz each target"
+        default: "600"
+        required: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - project_grid
+          - parse_pdf
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz -> target
+          key: fuzz-${{ matrix.target }}
+      - name: Install cargo-fuzz
+        run: cargo install --locked cargo-fuzz
+      - name: Install pdfium (for parse_pdf target)
+        if: matrix.target == 'parse_pdf'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget
+          mkdir -p pdfium/x86_64-unknown-linux-gnu/lib
+          wget -q https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-x64.tgz
+          tar -xzf pdfium-linux-x64.tgz -C pdfium/x86_64-unknown-linux-gnu
+      - name: Pick run duration
+        id: dur
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "seconds=3600" >> "$GITHUB_OUTPUT"     # nightly: 1h per target
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "seconds=${{ inputs.fuzz_seconds || 600 }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            echo "seconds=300" >> "$GITHUB_OUTPUT"      # main push: 5m per target
+          else
+            echo "seconds=120" >> "$GITHUB_OUTPUT"      # PR: 2m per target
+          fi
+      - name: Fuzz ${{ matrix.target }}
+        working-directory: fuzz
+        run: |
+          echo "::group::fuzz ${{ matrix.target }} for ${{ steps.dur.outputs.seconds }}s"
+          cargo +nightly fuzz run ${{ matrix.target }} \
+            -- -max_total_time=${{ steps.dur.outputs.seconds }} \
+            -print_final_stats=1
+          echo "::endgroup::"
+      - name: Upload crash artifacts (if any)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
+          retention-days: 30

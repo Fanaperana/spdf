@@ -8,13 +8,22 @@ edition = "2021"
 cargo-fuzz = true
 
 [dependencies]
-libfuzzer-sys = "0.4"
+libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
+arbitrary = { version = "1", features = ["derive"] }
 spdf-core = { path = "../crates/spdf-core" }
 spdf-types = { path = "../crates/spdf-types" }
+spdf-processing = { path = "../crates/spdf-processing" }
+spdf-projection = { path = "../crates/spdf-projection" }
 
 [[bin]]
 name = "parse_pdf"
 path = "fuzz_targets/parse_pdf.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "project_grid"
+path = "fuzz_targets/project_grid.rs"
 test = false
 doc = false
 

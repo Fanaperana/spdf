@@ -28,6 +28,9 @@ name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
+dependencies = [
+ "derive_arbitrary",
+]
 
 [[package]]
 name = "atomic-waker"
@@ -190,6 +193,17 @@ name = "crossbeam-utils"
 version = "0.8.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
+
+[[package]]
+name = "derive_arbitrary"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e567bd82dcff979e4b03460c307b3cdc9e96fde3d73bed1496d2bc75d9dd62a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "displaydoc"
@@ -1312,7 +1326,7 @@ dependencies = [
 
 [[package]]
 name = "spdf-convert"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "infer",
  "spdf-types",
@@ -1323,7 +1337,7 @@ dependencies = [
 
 [[package]]
 name = "spdf-core"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "rayon",
  "serde_json",
@@ -1342,14 +1356,17 @@ dependencies = [
 name = "spdf-fuzz"
 version = "0.0.0"
 dependencies = [
+ "arbitrary",
  "libfuzzer-sys",
  "spdf-core",
+ "spdf-processing",
+ "spdf-projection",
  "spdf-types",
 ]
 
 [[package]]
 name = "spdf-ocr"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "reqwest",
  "serde",
@@ -1361,7 +1378,7 @@ dependencies = [
 
 [[package]]
 name = "spdf-output"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -1370,7 +1387,7 @@ dependencies = [
 
 [[package]]
 name = "spdf-pdf"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "flate2",
  "image",
@@ -1384,7 +1401,7 @@ dependencies = [
 
 [[package]]
 name = "spdf-processing"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "spdf-types",
  "tracing",
@@ -1392,7 +1409,7 @@ dependencies = [
 
 [[package]]
 name = "spdf-projection"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "indexmap",
  "spdf-processing",
@@ -1402,7 +1419,7 @@ dependencies = [
 
 [[package]]
 name = "spdf-types"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "indexmap",
  "serde",
