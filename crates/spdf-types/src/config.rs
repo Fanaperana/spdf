@@ -105,6 +105,25 @@ pub struct ParseConfig {
     /// = no cap. Paths are not checked; only `ParseInput::Bytes`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_input_bytes: Option<u64>,
+    /// Reject PDFs whose raw bytes contain any literal `/Length N` entry
+    /// declaring a stream longer than this many bytes. Defaults to
+    /// `Some(256 MiB)`. This is a **partial** defense against memory
+    /// exhaustion: it catches crude `/Length`-bomb PDFs (attacker writes
+    /// `/Length 2000000000` in a tiny file, pdfium pre-allocates), but
+    /// does **not** catch zip-bomb streams where the compressed length
+    /// is small and the decompressed payload is huge. Set to `None` to
+    /// disable the check entirely. See TODO #T4.6.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_declared_stream_bytes: Option<u64>,
+    /// Reject PDFs whose FlateDecode streams collectively decompress
+    /// to more than this many bytes. Defaults to `Some(512 MiB)`. This
+    /// defends against **zip-bomb** adversarial PDFs where a small
+    /// compressed `/Length` expands into gigabytes of decompressed
+    /// data (the canonical fuzz-found OOM vector). Implemented as a
+    /// streaming decompression pre-scan with a total-output budget;
+    /// non-FlateDecode streams are ignored. Set to `None` to disable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_expanded_stream_bytes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub debug: Option<DebugConfig>,
 }
@@ -128,6 +147,8 @@ impl Default for ParseConfig {
             password: None,
             timeout_secs: None,
             max_input_bytes: None,
+            max_declared_stream_bytes: Some(256 * 1024 * 1024),
+            max_expanded_stream_bytes: Some(512 * 1024 * 1024),
             debug: None,
         }
     }

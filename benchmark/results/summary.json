@@ -4,51 +4,86 @@
       "fixture": "irs-f1040.pdf",
       "tess_words": 1780,
       "spdf": {
-        "ms": 311,
+        "ms": 244,
         "tokens": 1591,
         "precision": 0.7630421118793211,
         "recall": 0.8191632928475033,
         "f1": 0.7901073869183207
+      },
+      "lite": {
+        "ms": 546,
+        "tokens": 1575,
+        "precision": 0.7701587301587302,
+        "recall": 0.8184885290148448,
+        "f1": 0.7935884854432451
       }
     },
     {
       "fixture": "irs-fw9-p1-2.pdf",
       "tess_words": 2266,
       "spdf": {
-        "ms": 83,
+        "ms": 72,
         "tokens": 2253,
         "precision": 0.9835774522858411,
         "recall": 0.9906124273580689,
         "f1": 0.9870824053452116
+      },
+      "lite": {
+        "ms": 404,
+        "tokens": 2253,
+        "precision": 0.9840213049267643,
+        "recall": 0.9910594546267323,
+        "f1": 0.9875278396436525
       }
     },
     {
       "fixture": "nist-sp-800-53r5-p1-2.pdf",
       "tess_words": 115,
       "spdf": {
-        "ms": 16,
+        "ms": 22,
         "tokens": 96,
         "precision": 0.9791666666666666,
         "recall": 0.8245614035087719,
         "f1": 0.8952380952380952
+      },
+      "lite": {
+        "ms": 408,
+        "tokens": 94,
+        "precision": 1.0,
+        "recall": 0.8245614035087719,
+        "f1": 0.9038461538461539
       }
     },
     {
       "fixture": "nist-sp-800-63b-p1-2.pdf",
       "tess_words": 226,
       "spdf": {
-        "ms": 873,
+        "ms": 790,
         "tokens": 222,
         "precision": 0.9684684684684685,
         "recall": 0.9347826086956522,
         "f1": 0.9513274336283186
+      },
+      "lite": {
+        "ms": 4679,
+        "tokens": 226,
+        "precision": 0.9690265486725663,
+        "recall": 0.9521739130434783,
+        "f1": 0.9605263157894737
       }
     },
     {
       "fixture": "rfc8446-p1-2.pdf",
       "tess_words": 398,
       "spdf": {
-        "ms": 20,
+        "ms": 22,
+        "tokens": 399,
+        "precision": 0.9974937343358395,
+        "recall": 0.995,
+        "f1": 0.9962453066332916
+      },
+      "lite": {
+        "ms": 364,
         "tokens": 399,
         "precision": 0.9974937343358395,
         "recall": 0.995,
@@ -59,8 +94,15 @@
       "fixture": "rfc9110-p1-2.pdf",
       "tess_words": 3,
       "spdf": {
-        "ms": 267,
+        "ms": 215,
         "tokens": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "lite": {
+        "ms": 2868,
+        "tokens": 8,
         "precision": 0.0,
         "recall": 0.0,
         "f1": 0.0
@@ -70,18 +112,32 @@
       "fixture": "example-1.jpg",
       "tess_words": 271,
       "spdf": {
-        "ms": 1116,
+        "ms": 1043,
         "tokens": 231,
         "precision": 0.9653679653679653,
         "recall": 0.8198529411764706,
         "f1": 0.8866799204771372
+      },
+      "lite": {
+        "ms": 6511,
+        "tokens": 146,
+        "precision": 0.7876712328767124,
+        "recall": 0.4227941176470588,
+        "f1": 0.5502392344497608
       }
     },
     {
       "fixture": "test-ocr.pdf",
       "tess_words": 20,
       "spdf": {
-        "ms": 310,
+        "ms": 254,
+        "tokens": 20,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "lite": {
+        "ms": 2916,
         "tokens": 20,
         "precision": 1.0,
         "recall": 1.0,

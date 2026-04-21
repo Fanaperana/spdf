@@ -103,6 +103,14 @@ struct ParseArgs {
     /// Visualize grid rows/columns to this PNG path.
     #[arg(long = "visualize-grid")]
     visualize_grid: Option<PathBuf>,
+
+    /// Stream pages as they're produced instead of building the full
+    /// document in memory. For `--format text`, prints each page
+    /// separated by a blank line. For `--format json`, emits ND-JSON
+    /// (one JSON object per line, one page per line). OCR, tables,
+    /// and precise bounding boxes remain enabled per the other flags.
+    #[arg(long = "stream", default_value_t = false)]
+    stream: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -275,6 +283,10 @@ fn run_parse(args: ParseArgs, quiet: bool) -> Result<()> {
         eprintln!("Parsing {}...", args.file);
     }
 
+    if args.stream {
+        return run_parse_streaming(&parser, input, args.output.as_deref(), args.format.into());
+    }
+
     let result = parser.parse(input)?;
     let rendered = parser.format(&result);
 
@@ -285,6 +297,50 @@ fn run_parse(args: ParseArgs, quiet: bool) -> Result<()> {
             out.write_all(rendered.as_bytes())?;
             out.write_all(b"\n")?;
         }
+    }
+    Ok(())
+}
+
+/// Drive `SpdfParser::stream` and write each page as it arrives. This
+/// keeps peak memory at roughly one page instead of the whole
+/// `Vec<ParsedPage>`. Text format separates pages with a blank line;
+/// JSON format emits ND-JSON (one page per line).
+fn run_parse_streaming(
+    parser: &SpdfParser,
+    input: ParseInput,
+    output: Option<&std::path::Path>,
+    format: OutputFormat,
+) -> Result<()> {
+    let mut writer: Box<dyn Write> = match output {
+        Some(path) => Box::new(
+            std::fs::File::create(path)
+                .with_context(|| format!("opening {}", path.display()))?,
+        ),
+        None => Box::new(io::stdout().lock()),
+    };
+
+    let mut first = true;
+    for page in parser.stream(input)? {
+        let page = page?;
+        match format {
+            OutputFormat::Text => {
+                if !first {
+                    writer.write_all(b"\n\n")?;
+                }
+                writer.write_all(page.text.as_bytes())?;
+            }
+            OutputFormat::Json => {
+                let line = serde_json::to_string(&spdf_output::page_to_json_value(&page))
+                    .context("serializing page JSON")?;
+                writer.write_all(line.as_bytes())?;
+                writer.write_all(b"\n")?;
+            }
+        }
+        writer.flush()?;
+        first = false;
+    }
+    if matches!(format, OutputFormat::Text) && !first {
+        writer.write_all(b"\n")?;
     }
     Ok(())
 }

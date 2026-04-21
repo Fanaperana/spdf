@@ -20,6 +20,7 @@ path = "src/main.rs"
 [dependencies]
 spdf-core.workspace = true
 spdf-types.workspace = true
+spdf-output.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 tracing.workspace = true

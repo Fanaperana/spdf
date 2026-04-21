@@ -54,6 +54,13 @@ pub fn to_json_string(result: &ParseResult) -> SpdfResult<String> {
     Ok(serde_json::to_string_pretty(&json)?)
 }
 
+/// Serialise a single [`ParsedPage`] to its JSON form. Used by the
+/// CLI's `--stream --format json` mode to emit ND-JSON, one page per
+/// line, without materialising the full document in memory.
+pub fn page_to_json_value(page: &ParsedPage) -> JsonPage {
+    page_to_json(page)
+}
+
 /// Implementation detail to match liteparse JSON key ordering. Kept as a
 /// dedicated helper in case we need to deviate from serde's default.
 pub fn bounding_box_round_trip(bbox: BoundingBox) -> BoundingBox {

@@ -18,6 +18,7 @@ fuzz_target!(|data: &[u8]| {
         .ocr_enabled(false)
         .max_pages(8)
         .max_input_bytes(1 << 20) // 1 MiB
+        .max_expanded_stream_bytes(Some(16 * 1024 * 1024)) // 16 MiB
         .timeout_secs(10)
         .build();
 

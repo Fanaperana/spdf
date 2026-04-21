@@ -92,6 +92,41 @@ impl SpdfParser {
         };
         check_deadline("load")?;
 
+        // Partial #T4.6 guard: reject PDFs that declare an individual
+        // stream length larger than `max_declared_stream_bytes`. This
+        // catches blatant `/Length`-bomb adversarial files before
+        // pdfium has a chance to pre-allocate. It does NOT catch
+        // zip-bomb streams (small compressed, huge decompressed) —
+        // those remain a known pre-1.0 issue.
+        if let Some(cap) = self.config.max_declared_stream_bytes {
+            if let Some(n) = scan_max_declared_length(&bytes) {
+                if n > cap {
+                    return Err(SpdfError::InvalidInput(format!(
+                        "spdf: PDF declares a stream of {n} bytes; exceeds \
+                         max_declared_stream_bytes cap of {cap}"
+                    )));
+                }
+            }
+        }
+        check_deadline("length-scan")?;
+
+        if let Some(cap) = self.config.max_expanded_stream_bytes {
+            match scan_expanded_flate_bytes(&bytes, cap) {
+                ExpandedScan::Ok(total) => {
+                    if total > 0 {
+                        debug!(expanded = total, "spdf: flate pre-scan ok");
+                    }
+                }
+                ExpandedScan::Overflowed { at_least } => {
+                    return Err(SpdfError::InvalidInput(format!(
+                        "spdf: FlateDecode streams expand to at least {at_least} \
+                         bytes; exceeds max_expanded_stream_bytes cap of {cap}"
+                    )));
+                }
+            }
+        }
+        check_deadline("expand-scan")?;
+
         let doc = self
             .pdf_engine
             .load_bytes(&bytes, self.config.password.as_deref())?;
@@ -333,13 +368,40 @@ impl SpdfParser {
         &self,
         input: I,
     ) -> SpdfResult<Box<dyn Iterator<Item = SpdfResult<ParsedPage>> + '_>> {
-        let bytes = match self.materialise(input.into())? {
+        let input = input.into();
+        if let (ParseInput::Bytes(b), Some(cap)) = (&input, self.config.max_input_bytes) {
+            if b.len() as u64 > cap {
+                return Err(SpdfError::InvalidInput(format!(
+                    "spdf: input {} bytes exceeds max_input_bytes {cap}",
+                    b.len()
+                )));
+            }
+        }
+        let bytes = match self.materialise(input)? {
             Materialised::Pdf { bytes, .. } => bytes,
             Materialised::PlainText(content) => {
                 let page = plain_text_result(content).pages.remove(0);
                 return Ok(Box::new(std::iter::once(Ok(page))));
             }
         };
+        if let Some(cap) = self.config.max_declared_stream_bytes {
+            if let Some(n) = scan_max_declared_length(&bytes) {
+                if n > cap {
+                    return Err(SpdfError::InvalidInput(format!(
+                        "spdf: PDF declares a stream of {n} bytes; exceeds \
+                         max_declared_stream_bytes cap of {cap}"
+                    )));
+                }
+            }
+        }
+        if let Some(cap) = self.config.max_expanded_stream_bytes {
+            if let ExpandedScan::Overflowed { at_least } = scan_expanded_flate_bytes(&bytes, cap) {
+                return Err(SpdfError::InvalidInput(format!(
+                    "spdf: FlateDecode streams expand to at least {at_least} \
+                     bytes; exceeds max_expanded_stream_bytes cap of {cap}"
+                )));
+            }
+        }
         let doc = self
             .pdf_engine
             .load_bytes(&bytes, self.config.password.as_deref())?;
@@ -686,6 +748,18 @@ impl ParseConfigBuilder {
         self.config.max_input_bytes = Some(bytes);
         self
     }
+    /// Reject PDFs declaring any single stream larger than this. `None`
+    /// disables the check (not recommended on untrusted input).
+    pub fn max_declared_stream_bytes(mut self, bytes: Option<u64>) -> Self {
+        self.config.max_declared_stream_bytes = bytes;
+        self
+    }
+    /// Reject PDFs whose FlateDecode streams collectively expand to
+    /// more than this many bytes. `None` disables the pre-scan.
+    pub fn max_expanded_stream_bytes(mut self, bytes: Option<u64>) -> Self {
+        self.config.max_expanded_stream_bytes = bytes;
+        self
+    }
     pub fn config(self) -> ParseConfig {
         self.config
     }
@@ -786,6 +860,230 @@ fn strip_ocr_pipe_artifacts(text: &str) -> String {
     text.trim().trim_matches('|').trim().to_string()
 }
 
+/// Scan raw PDF bytes for the largest **directly-declared** `/Length N`
+/// value. Returns `None` if no direct `/Length` entries are found (e.g.
+/// all lengths are indirect references `/Length 5 0 R`, or the input
+/// isn't a PDF). Only ASCII digit runs after a whitespace-separated
+/// `/Length` token are considered, so the scan is cheap (single pass,
+/// no decompression, no parsing) and has no false positives from
+/// text that happens to contain the substring.
+///
+/// Used by [`SpdfParser::parse`] / [`SpdfParser::stream`] as a partial
+/// OOM guard against adversarial PDFs that declare multi-gigabyte
+/// streams to trick pdfium into pre-allocating huge buffers. Zip
+/// bombs (small `/Length`, huge decompressed output) are **not**
+/// detected by this scan — that class of attack is still #T4.6.
+fn scan_max_declared_length(bytes: &[u8]) -> Option<u64> {
+    const KEY: &[u8] = b"/Length";
+    let mut max: Option<u64> = None;
+    let mut i = 0usize;
+    while i + KEY.len() <= bytes.len() {
+        if &bytes[i..i + KEY.len()] != KEY {
+            i += 1;
+            continue;
+        }
+        // Must be followed by a PDF whitespace byte, otherwise this is
+        // `/LengthX` (e.g. `/Length1`, a legit Type1 font metric that
+        // we must not conflate with `/Length`).
+        let mut j = i + KEY.len();
+        if j >= bytes.len() || !is_pdf_ws(bytes[j]) {
+            i = j;
+            continue;
+        }
+        // Skip whitespace to the first non-ws byte.
+        while j < bytes.len() && is_pdf_ws(bytes[j]) {
+            j += 1;
+        }
+        // Parse an unsigned decimal. If the next byte isn't a digit
+        // this is an indirect reference like `/Length 5 0 R` — still
+        // starts with a digit — or a non-numeric value. We capture the
+        // digits and then verify the *next* byte is NOT the start of
+        // an indirect-reference continuation: a legitimate indirect
+        // ref is `<num> <num> R`, so we only count the length when it
+        // is immediately followed by ws+non-digit OR EOF-ish bytes.
+        let mut n: u64 = 0;
+        let mut any = false;
+        let mut overflow = false;
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
+            any = true;
+            n = n
+                .saturating_mul(10)
+                .saturating_add((bytes[j] - b'0') as u64);
+            if n == u64::MAX {
+                overflow = true;
+            }
+            j += 1;
+        }
+        if !any {
+            i = j.max(i + 1);
+            continue;
+        }
+        // Detect indirect references: `<N> <ws> <M> <ws> R`. If so,
+        // skip scoring this /Length entry — we can't know the true
+        // length without resolving the xref.
+        let is_indirect = {
+            let mut k = j;
+            let mut saw_ws = false;
+            while k < bytes.len() && is_pdf_ws(bytes[k]) {
+                saw_ws = true;
+                k += 1;
+            }
+            saw_ws && k < bytes.len() && bytes[k].is_ascii_digit() && {
+                while k < bytes.len() && bytes[k].is_ascii_digit() {
+                    k += 1;
+                }
+                let mut saw_ws2 = false;
+                while k < bytes.len() && is_pdf_ws(bytes[k]) {
+                    saw_ws2 = true;
+                    k += 1;
+                }
+                saw_ws2 && k < bytes.len() && bytes[k] == b'R'
+            }
+        };
+        if !is_indirect {
+            let value = if overflow { u64::MAX } else { n };
+            max = Some(max.map_or(value, |m| m.max(value)));
+        }
+        // Advance past the digits we just parsed.
+        i = j;
+    }
+    max
+}
+
+/// PDF 32000-1:2008 §7.2.2 whitespace chars (excluding the form feed
+/// which is not valid in PDF): NUL, TAB, LF, CR, SPACE, plus the form
+/// feed `0x0C` which PDF does accept as whitespace.
+#[inline]
+fn is_pdf_ws(b: u8) -> bool {
+    matches!(b, 0x00 | 0x09 | 0x0A | 0x0C | 0x0D | 0x20)
+}
+
+/// Result of the FlateDecode expansion pre-scan.
+enum ExpandedScan {
+    /// Total decompressed bytes across all FlateDecode streams stayed
+    /// within budget. Carries the running total for logging.
+    Ok(u64),
+    /// A stream's decompressed output crossed the budget. We stop as
+    /// soon as we prove the total exceeds the cap and report how much
+    /// we'd already produced (at-least lower bound).
+    Overflowed { at_least: u64 },
+}
+
+/// Decompress every FlateDecode stream in the PDF bytes under a shared
+/// output budget. Returns [`ExpandedScan::Overflowed`] the instant the
+/// cumulative decompressed size exceeds `cap`, short-circuiting the
+/// remaining streams. This catches zip-bomb PDFs that evade
+/// [`scan_max_declared_length`] by using tiny compressed `/Length`
+/// values and relying on deflate expansion.
+///
+/// The scan is deliberately sloppy about locating stream bodies — we
+/// look for `/FlateDecode` inside each `<< ... >>\s*stream\n` block
+/// and feed bytes between `stream(\r?\n)` and `endstream` to flate2.
+/// Non-FlateDecode streams (JPEG, CCITTFax, etc.) are skipped; they
+/// already carry their own decoded size in `/Length` and are caught
+/// by the direct-length guard.
+fn scan_expanded_flate_bytes(bytes: &[u8], cap: u64) -> ExpandedScan {
+    use flate2::Decompress;
+    const STREAM: &[u8] = b"stream";
+    const ENDSTREAM: &[u8] = b"endstream";
+    const FLATE: &[u8] = b"/FlateDecode";
+    const CHUNK_OUT: usize = 64 * 1024;
+
+    let mut total: u64 = 0;
+    let mut i = 0usize;
+    while let Some(rel) = find_bytes(&bytes[i..], STREAM) {
+        let marker = i + rel;
+        // The `stream` keyword must be a standalone PDF token: the
+        // byte before it is whitespace and the byte after it is an
+        // EOL. Otherwise this is a substring (e.g. `endstream`).
+        let ok_prev = marker == 0 || is_pdf_ws(bytes[marker - 1]);
+        let after_kw = marker + STREAM.len();
+        let body_start = match bytes.get(after_kw) {
+            Some(&b'\r') if bytes.get(after_kw + 1) == Some(&b'\n') => after_kw + 2,
+            Some(&b'\n') => after_kw + 1,
+            _ => {
+                i = marker + STREAM.len();
+                continue;
+            }
+        };
+        if !ok_prev {
+            i = marker + STREAM.len();
+            continue;
+        }
+        // Look back up to 4 KiB for the dict's `/Filter /FlateDecode`.
+        let window_start = marker.saturating_sub(4096);
+        let dict = &bytes[window_start..marker];
+        let is_flate = find_bytes(dict, FLATE).is_some();
+
+        // Find the endstream marker, capped to a generous upper bound
+        // so adversarial files without an `endstream` don't make us
+        // scan to EOF.
+        let search_end = (body_start + 64 * 1024 * 1024).min(bytes.len());
+        let end = match find_bytes(&bytes[body_start..search_end], ENDSTREAM) {
+            Some(r) => body_start + r,
+            None => {
+                // Unterminated stream — nothing useful to scan further.
+                break;
+            }
+        };
+        if is_flate {
+            let body = &bytes[body_start..end];
+            let mut dec = Decompress::new(/* zlib = */ true);
+            let mut scratch = vec![0u8; CHUNK_OUT];
+            let mut input_cursor = 0usize;
+            let mut overflowed = false;
+            loop {
+                let before_in = dec.total_in();
+                let before_out = dec.total_out();
+                let status = dec.decompress(
+                    &body[input_cursor..],
+                    &mut scratch,
+                    flate2::FlushDecompress::None,
+                );
+                let produced = dec.total_out() - before_out;
+                let consumed = (dec.total_in() - before_in) as usize;
+                input_cursor += consumed;
+                total = total.saturating_add(produced);
+                if total > cap {
+                    overflowed = true;
+                    break;
+                }
+                match status {
+                    Ok(flate2::Status::StreamEnd) => break,
+                    Ok(flate2::Status::BufError) | Err(_) => {
+                        // Corrupt / non-zlib stream: stop scanning this
+                        // body. pdfium will hit the same data later
+                        // and return a parse error.
+                        break;
+                    }
+                    Ok(flate2::Status::Ok) => {
+                        if produced == 0 && consumed == 0 {
+                            // No progress: avoid infinite loop on
+                            // truncated input.
+                            break;
+                        }
+                    }
+                }
+            }
+            if overflowed {
+                return ExpandedScan::Overflowed { at_least: total };
+            }
+        }
+        i = end + ENDSTREAM.len();
+    }
+    ExpandedScan::Ok(total)
+}
+
+/// Byte-slice substring search. `haystack.windows(needle.len())` plus
+/// a linear scan. Stays in the hot path only when streams exist.
+#[inline]
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -819,5 +1117,49 @@ mod tests {
         assert!(!overlaps_existing_text(&items, 200.0, 200.0, 40.0, 12.0));
         // Within tolerance -> overlaps
         assert!(overlaps_existing_text(&items, 11.0, 21.0, 1.0, 1.0));
+    }
+
+    #[test]
+    fn length_scan_finds_max_direct() {
+        let bytes = b"<< /Length 42 >>\n<< /Length 9999 >>\n<< /Length 7 >>";
+        assert_eq!(scan_max_declared_length(bytes), Some(9999));
+    }
+
+    #[test]
+    fn length_scan_ignores_length1_length2() {
+        // Type1 font dicts legally carry /Length1 /Length2 /Length3
+        // with encoded-segment sizes. Those must not be confused with
+        // the stream-length `/Length`.
+        let bytes = b"<< /Length1 2000000000 /Length 5 >>";
+        assert_eq!(scan_max_declared_length(bytes), Some(5));
+    }
+
+    #[test]
+    fn length_scan_ignores_indirect_refs() {
+        // `/Length 5 0 R` is an indirect reference; we cannot score it
+        // without resolving the xref, so it must not poison the scan.
+        let bytes = b"<< /Length 5 0 R /Filter /FlateDecode >>";
+        assert_eq!(scan_max_declared_length(bytes), None);
+    }
+
+    #[test]
+    fn length_scan_returns_none_on_empty() {
+        assert_eq!(scan_max_declared_length(b""), None);
+        assert_eq!(scan_max_declared_length(b"no pdf here"), None);
+    }
+
+    #[test]
+    fn length_scan_detects_pathological() {
+        let bytes = b"<< /Length 2147483648 >>";
+        assert_eq!(scan_max_declared_length(bytes), Some(2147483648));
+    }
+
+    #[test]
+    fn length_scan_handles_overflow_saturation() {
+        // A /Length value that overflows u64 saturates rather than panicking.
+        let mut s = b"<< /Length ".to_vec();
+        s.extend(std::iter::repeat(b'9').take(40));
+        s.extend_from_slice(b" >>");
+        assert_eq!(scan_max_declared_length(&s), Some(u64::MAX));
     }
 }

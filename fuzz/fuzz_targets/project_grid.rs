@@ -6,9 +6,9 @@
 //! clustering / grid / header-footer / table passes.
 
 use arbitrary::Arbitrary;
-use libfuzzer_sys::{Corpus, fuzz_target};
+use libfuzzer_sys::{fuzz_target, Corpus};
 use spdf_processing::tables::detect_tables;
-use spdf_projection::{PageInput, project_pages_to_grid};
+use spdf_projection::{project_pages_to_grid, PageInput};
 use spdf_types::{ParseConfig, TextItem};
 
 /// Fuzz-friendly projection of `TextItem` — every field constrained to
