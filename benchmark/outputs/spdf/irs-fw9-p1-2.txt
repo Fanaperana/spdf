@@ -8,23 +8,23 @@ Before you begin. For guidance related to the purpose of Form W-9, see Purpose o
         2  Business name/disregarded entity name, if different from above.
         3a Check the appropriate box for federal tax classification of the entity/individual whose name is entered on line 1. Check 4 Exemptions (codes apply only to
    on page 3. only one of the following seven boxes.                                                                             certain entities, not individuals;
-               Individual/sole proprietor      C corporation         S corporation         Partnership        Trust/estate       see instructions on page 3):
-               LLC. Enter the tax classification (C = C corporation, S = S corporation, P = Partnership) . . . .               Exempt payee code (if any)
+               Individual/sole proprietor      corporation           S corporation        Partnership         Trust/estate       see instructions on page 3):
+               LLC. Enter the tax classification (C = C corporation, S = S corporation, P = Partnership) . . . .              Exempt payee code (if any)
                Note: Check the “LLC” box above and, in the entry space, enter the appropriate code (C, S, or P) for the tax
                classification of the LLC, unless it is a disregarded entity. A disregarded entity should instead check the appropriate Exemption from Foreign Account Tax
 Print or type. box for the tax classification of its owner.                                                                   Compliance Act (FATCA) reporting
-   Specific Instructions Other (see instructions)                                                                              code (if any)
+   Specific Instructions Other (see instructions)                                                                             code (if any)
         3b If on line 3a you checked “Partnership” or “Trust/estate,” or checked “LLC” and entered “P” as its tax classification,
-           and you are providing this form to a partnership, trust, or estate in which you have an ownership interest, check     (Applies to accounts maintained
+           and you are providing this form to a partnership, trust, or estate in which you have an ownership interest, check    (Applies to accounts maintained
            this box if you have any foreign partners, owners, or beneficiaries. See instructions . . . . . . . . .                 outside the United States.)
    See  5 Address (number, street, and apt. or suite no.). See instructions.                               Requester’s name and address (optional)
         6 City, state, and ZIP code
         7  List account number(s) here (optional)
   Part I       Taxpayer Identification Number (TIN)
-Enter your TIN in the appropriate box. The TIN provided must match the name given on line 1 to avoid                Social security number
+Enter your TIN in the appropriate box. The TIN provided must match the name given on line 1 to avoid               Social security number
 backup withholding. For individuals, this is generally your social security number (SSN). However, for a
 resident alien, sole proprietor, or disregarded entity, see the instructions for Part I, later. For other
-entities, it is your employer identification number (EIN). If you do not have a number, see How to get a           or
+entities, it is your employer identification number (EIN). If you do not have a number, see How to get a          or
 TIN, later.                                                                                                         Employer identification number
 Note: If the account is in more than one name, see the instructions for line 1. See also What Name and
 Number To Give the Requester for guidelines on whose number to enter.
@@ -56,7 +56,7 @@ this line. An LLC that is a disregarded entity should check the                 
 appropriate box for the tax classification of its owner. Otherwise, it
 should check the “LLC” box and enter its appropriate tax classification.            An individual or entity (Form W-9 requester) who is required to file an
                                                                                     information return with the IRS is giving you this form because they
-                                                            Cat. No. 10231X                                                               Form W-9 (Rev. 3-2024)
+                                                            Cat. No. 10231X                                                              Form W-9 (Rev. 3-2024)
 
 Form W-9 (Rev. 3-2024)                                                                                                                              Page 2
 must obtain your correct taxpayer identification number (TIN), which             Foreign person. If you are a foreign person or the U.S. branch of a

@@ -127,17 +127,29 @@ impl SpdfParser {
         }
         check_deadline("expand-scan")?;
 
+        // #T1.1: auto-enable preserve_very_small_text for AcroForm PDFs.
+        // Form fields often use tiny font sizes for labels, checkboxes, and
+        // revision stamps. The density-aware filter (#T1.2) keeps most of
+        // them, but AcroForm PDFs are precisely the class where the residual
+        // drops hurt recall. If the user didn't explicitly set the flag and
+        // the PDF carries an /AcroForm dict, flip it on automatically.
+        let mut cfg = self.config.clone();
+        if !cfg.preserve_very_small_text && scan_has_acroform(&bytes) {
+            debug!("spdf: /AcroForm detected, auto-enabling preserve_very_small_text");
+            cfg.preserve_very_small_text = true;
+        }
+
         let doc = self
             .pdf_engine
-            .load_bytes(&bytes, self.config.password.as_deref())?;
-        let total_pages = doc.num_pages().min(self.config.max_pages);
+            .load_bytes(&bytes, cfg.password.as_deref())?;
+        let total_pages = doc.num_pages().min(cfg.max_pages);
         info!(pages = total_pages, "spdf: parsing");
 
-        let page_numbers = select_pages(total_pages, self.config.target_pages.as_deref())?;
+        let page_numbers = select_pages(total_pages, cfg.target_pages.as_deref())?;
         debug!(selected = page_numbers.len(), "spdf: page set selected");
 
         let opts = ExtractOptions {
-            extract_images: self.config.ocr_enabled,
+            extract_images: cfg.ocr_enabled,
         };
 
         let pdf_engine = Arc::clone(&self.pdf_engine);
@@ -150,7 +162,7 @@ impl SpdfParser {
         // Phase 6: Selective OCR. Run on pages with sparse text or embedded
         // images, then append non-overlapping OCR items to `text_items` so the
         // downstream projection treats them uniformly.
-        if self.config.ocr_enabled {
+        if cfg.ocr_enabled {
             if let Some(ocr) = self.ocr_engine.as_ref() {
                 self.run_ocr(&doc, &mut page_datas, ocr.as_ref())?;
             } else {
@@ -195,7 +207,7 @@ impl SpdfParser {
             })
             .collect();
 
-        let mut processed: Vec<ParsedPage> = project_pages_to_grid(pages, &self.config);
+        let mut processed: Vec<ParsedPage> = project_pages_to_grid(pages, &cfg);
 
         // Strip running headers / footers that repeat across pages. Lifts
         // precision on multi-page docs (NIST 800-53r5, NIST 800-63b, RFC
@@ -204,13 +216,13 @@ impl SpdfParser {
             strip_repeating_running_text(&mut processed);
         }
 
-        if self.config.precise_bounding_box {
+        if cfg.precise_bounding_box {
             for page in processed.iter_mut() {
                 page.bounding_boxes = Some(build_bounding_boxes(&page.text_items));
             }
         }
 
-        if self.config.detect_tables {
+        if cfg.detect_tables {
             for page in processed.iter_mut() {
                 let tables = spdf_processing::tables::detect_tables(&page.text_items);
                 if !tables.is_empty() {
@@ -231,7 +243,7 @@ impl SpdfParser {
             json: None,
         };
 
-        if matches!(self.config.output_format, OutputFormat::Json) {
+        if matches!(cfg.output_format, OutputFormat::Json) {
             result.json = Some(to_json(&result));
         }
 
@@ -402,19 +414,24 @@ impl SpdfParser {
                 )));
             }
         }
+        // #T1.1: auto-enable preserve_very_small_text for AcroForm PDFs.
+        let mut cfg = self.config.clone();
+        if !cfg.preserve_very_small_text && scan_has_acroform(&bytes) {
+            debug!("spdf: /AcroForm detected in stream, auto-enabling preserve_very_small_text");
+            cfg.preserve_very_small_text = true;
+        }
         let doc = self
             .pdf_engine
-            .load_bytes(&bytes, self.config.password.as_deref())?;
-        let total = doc.num_pages().min(self.config.max_pages);
-        let page_numbers = select_pages(total, self.config.target_pages.as_deref())?;
+            .load_bytes(&bytes, cfg.password.as_deref())?;
+        let total = doc.num_pages().min(cfg.max_pages);
+        let page_numbers = select_pages(total, cfg.target_pages.as_deref())?;
         let opts = ExtractOptions {
-            extract_images: self.config.ocr_enabled,
+            extract_images: cfg.ocr_enabled,
         };
         let engine = Arc::clone(&self.pdf_engine);
-        let precise_bbox = self.config.precise_bounding_box;
-        let detect_tables = self.config.detect_tables;
-        let debug_on = self.config.debug.as_ref().is_some_and(|d| d.enabled);
-        let cfg = self.config.clone();
+        let precise_bbox = cfg.precise_bounding_box;
+        let detect_tables = cfg.detect_tables;
+        let debug_on = cfg.debug.as_ref().is_some_and(|d| d.enabled);
         let iter = page_numbers.into_iter().map(move |page_num| {
             let pd = engine.extract_page(&doc, page_num, opts)?;
             let pages = spdf_projection::project_pages_to_grid(
@@ -858,6 +875,24 @@ fn is_ocr_punctuation_noise(text: &str) -> bool {
 /// Only pipes are removed — other punctuation is legitimate.
 fn strip_ocr_pipe_artifacts(text: &str) -> String {
     text.trim().trim_matches('|').trim().to_string()
+}
+
+/// Cheap byte-level check for the `/AcroForm` key in the raw PDF. Returns
+/// `true` when the PDF's trailer / root dict contains an AcroForm entry,
+/// which indicates the document is an interactive form (e.g. IRS 1040,
+/// W-9). Used by #T1.1 to auto-enable `preserve_very_small_text` — form
+/// PDFs routinely use tiny font sizes for field labels that the density
+/// filter would otherwise drop.
+///
+/// This is a substring scan, not a real PDF parse. It can theoretically
+/// false-positive on a PDF whose *body text* contains the literal bytes
+/// `/AcroForm`, but that is astronomically unlikely in practice —
+/// `/AcroForm` is a reserved PDF dictionary key.
+fn scan_has_acroform(bytes: &[u8]) -> bool {
+    const KEY: &[u8] = b"/AcroForm";
+    bytes
+        .windows(KEY.len())
+        .any(|w| w == KEY)
 }
 
 /// Scan raw PDF bytes for the largest **directly-declared** `/Length N`

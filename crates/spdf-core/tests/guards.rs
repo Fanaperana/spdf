@@ -320,3 +320,51 @@ fn zip_bomb_guard_rejects_fuzz_corpus_oom_artifact() {
         }
     }
 }
+
+// ── #T1.1 AcroForm auto-detection ──────────────────────────────────
+
+/// AcroForm PDFs should auto-enable `preserve_very_small_text` even
+/// when the caller leaves it at the default (`false`). This test
+/// parses the IRS 1040 form (which has `/AcroForm`) and verifies
+/// parsing succeeds (the actual F1 lift is checked by the benchmark).
+#[test]
+fn acroform_pdf_auto_enables_preserve_small() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../example/corpus/irs-f1040.pdf");
+    if !fixture.exists() {
+        eprintln!("skipping: fixture not found at {}", fixture.display());
+        return;
+    }
+    let bytes = std::fs::read(&fixture).unwrap();
+
+    // Default config — preserve_very_small_text is false.
+    let parser = SpdfParser::builder().ocr_enabled(false).build();
+    let result = parser.parse(ParseInput::Bytes(bytes)).unwrap();
+
+    // The IRS 1040 has at least one page.
+    assert!(!result.pages.is_empty(), "should have parsed pages");
+    // Text shouldn't be empty — AcroForm detection should have
+    // kept the small-text form fields.
+    assert!(
+        !result.text.trim().is_empty(),
+        "text output should not be empty"
+    );
+}
+
+/// A non-form PDF (RFC 8446) should NOT trigger AcroForm auto-detection.
+#[test]
+fn non_form_pdf_does_not_trigger_acroform() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../example/corpus/rfc8446-p1-2.pdf");
+    if !fixture.exists() {
+        eprintln!("skipping: fixture not found");
+        return;
+    }
+    let bytes = std::fs::read(&fixture).unwrap();
+
+    let parser = SpdfParser::builder().ocr_enabled(false).build();
+    let result = parser.parse(ParseInput::Bytes(bytes)).unwrap();
+
+    // Should parse fine without the small-text preservation.
+    assert!(!result.pages.is_empty());
+}

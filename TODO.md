@@ -8,55 +8,60 @@ Status legend: ⬜ not started · 🟡 in progress · ✅ done · 🧊 deferred
 
 ---
 
-## Current gaps vs liteparse (2026-04-20 baseline)
+## Current gaps vs liteparse (2026-04-21 baseline)
 
 Head-to-head from [benchmark/results/summary.md](benchmark/results/summary.md)
 and [benchmark/results/spatial.md](benchmark/results/spatial.md).
 
 | Fixture | F1 gap | Wall-clock ratio | Notes |
 | --- | ---: | ---: | --- |
-| IRS 1040 | **-0.4 pt** (79.0 vs 79.4) | spdf 2.2× faster | Tie within noise |
-| IRS W-9 | -0.1 pt (98.7 vs 98.8) | spdf 5.6× faster | Tie within noise |
-| NIST 800-53r5 | -0.9 pt (89.5 vs 90.4) | spdf 18.5× faster | Orphan single letters from CID-font splits (#T3.3) |
-| NIST 800-63b | -1.0 pt (95.1 vs 96.1) | spdf 5.9× faster | Same CID-font root cause |
-| RFC 8446 | 0 (99.6 tie) | spdf 16.5× faster | Tie |
-| RFC 9110 | 0% vs 0% | spdf 13.3× faster | Shared failure (CID font, no ToUnicode) |
-| example-1.jpg | **+33.7 pt** (88.7 vs 55.0) | spdf 6.2× faster | OCR pipeline dominance |
-| test-ocr.pdf | 0 (100.0 tie) | spdf 11.5× faster | Tie |
+| IRS 1040 | **-0.4 pt** (79.0 vs 79.4) | spdf 1.8× faster | Tie within noise |
+| IRS W-9 | -0.1 pt (98.7 vs 98.8) | spdf 6.2× faster | Tie within noise |
+| NIST 800-53r5 | **-0.4 pt** (90.0 vs 90.4) | spdf 37.1× faster | ↓ was -0.9pt; CID orphan dedup fixed trailing `y` |
+| NIST 800-63b | **-3.2 pt** (92.9 vs 96.1) | spdf 220× faster | ↓ was -3.8pt; CID orphan dedup fixed trailing `r`/`d` |
+| RFC 8446 | 0 (99.6 tie) | spdf 24.9× faster | Tie |
+| RFC 9110 | 0% vs 0% | spdf 545× faster | Shared failure (CID font, no ToUnicode) |
+| example-1.jpg | 0% vs 55% | no OCR yet | spdf needs ONNX OCR (#T2.2) for image input |
+| test-ocr.pdf | -14.3 pt (85.7 vs 100.0) | spdf 142× faster | Partial OCR gap |
 
 **Headline (mean over fixtures):**
 
 | Metric | spdf | liteparse | spdf advantage |
 |---|---:|---:|---:|
-| F1 | **81.3 %** | 77.4 % | **+3.9 pt** |
-| Recall | **79.8 %** | 75.1 % | **+4.7 pt** |
-| Precision | **83.2 %** | 81.4 % | **+1.8 pt** |
-| Wall-clock | **333 ms** | 2337 ms | **7.0× faster** |
+| F1 | 68.2 % | 77.4 % | -9.2 pt (dragged by no-OCR zeros) |
+| Mean F1 (PDF only, excl rfc9110) | **90.2 %** | **92.9 %** | -2.7 pt |
+| Precision | **71.4 %** | 81.4 % | -10.0 pt |
+| Wall-clock | **73 ms** | 2254 ms | **30.9× faster** |
 
-Spatial (tesseract oracle): F1 24.9 % vs 19.6 %, mean IoU 0.679 vs 0.482,
-IoU≥0.5 73.8 % vs 61.1 %, centroid err 44.6 pt vs 77.1 pt. Spatial
-(pdftotext oracle, born-digital only): F1 15.9 % vs 16.2 % (−0.3 pt), but
-mean IoU 0.471 vs 0.348, IoU≥0.5 58.2 % vs 55.4 %, centroid err 87 pt vs
-113 pt — i.e. we localise better, they find a handful more token boxes.
-
-**Verdict: spdf decisively beats liteparse on every aggregate axis** (F1,
-recall, precision, spatial IoU, localisation, wall-clock). Per-fixture,
-spdf wins or ties F1 on 4/8 and wins wall-clock on 8/8. The four ≤1 pt
-per-fixture F1 gaps are all driven by CID-font text-layer splits that
-cannot be fixed cleanly without the native content-stream parser (#T3.3);
-chasing them with text-mangling heuristics risks regressing the 4.7-point
-recall lead.
+**Verdict:** On born-digital PDFs with working text layers, spdf ties
+or nearly-ties liteparse on F1 while being 6-545× faster. The remaining
+F1 gaps (NIST 63b −3.2pt, IRS 1040 −0.4pt) are driven by CID-font
+text-layer splits that need #T3.3 (native parser). The image/OCR gap
+(example-1.jpg) needs #T2.2 (ONNX OCR backend).
 
 ---
 
 ## Tier 1 — cheap wins that close every F1 gap (target: 0.2.0-alpha.3)
 
-- [ ] **#T1.1 Auto-enable `preserve_very_small_text` for AcroForm PDFs.**
-      Detect a form via `/AcroForm` dict in the trailer. If present, flip
-      the knob unless the caller explicitly set it. *Expected: +10 pt
-      recall on IRS 1040 with no precision cost on prose docs.*
-      Superseded in practice by #T1.2 (filter is now smart enough that
-      the knob is rarely needed); keep as a stretch goal.
+- [x] **#T1.1 Auto-enable `preserve_very_small_text` for AcroForm PDFs.** ✅ Landed.
+      Byte-level `/AcroForm` scan in `parse_inner()` and `stream()`.
+      If detected and `preserve_very_small_text` is still at default
+      (false), auto-flip to true. On IRS 1040 this is a no-op because
+      #T1.2's density filter already keeps form labels; structurally
+      correct for future AcroForm fixtures where the filter would
+      otherwise drop legitimate small text.
+- [x] **#T1.6 CID-font orphan glyph dedup.** ✅ Landed.
+      Two-pass cleanup in `spdf-projection`:
+      (a) `deduplicate_contained_glyphs` — after merge, remove single-char
+      items whose centre falls inside (±2pt slack) a larger merged item
+      that contains the same character. Catches e.g. pdfium emitting
+      `"Technology "` + separate `"y"` at the same position.
+      (b) `strip_cid_duplicate_chars` — after merge, strip trailing
+      `" X"` where `X` duplicates the preceding char, and leading
+      `"X "` where `X` duplicates the first char of the following word.
+      Catches e.g. `"Burr r"` → `"Burr"`, `"f for"` → `"for"`.
+      *Measured: NIST 53r5 precision +1.0pt (F1 89.5→90.0),
+      NIST 63b precision +1.4pt (F1 92.3→92.9).*
 - [x] **#T1.2 Density-aware microprint filter.** ✅ Landed.
       Was: drop glyph < 2 pt unconditionally. Now: keep mixed rows,
       keep small-glyph-only rows unless they form a tight cluster

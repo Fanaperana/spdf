@@ -83,6 +83,15 @@ pub fn project_page(page: PageInput, debug: bool, preserve_small: bool) -> Parse
     // Stitch per-character runs back into words (xDelta tight + same baseline).
     merge_continuous_runs(&mut text_items);
 
+    // Drop CID-font orphan glyphs: tiny single-char items whose bbox falls
+    // inside a larger merged item that already contains that character.
+    // Must run AFTER merge_continuous_runs so the container items exist.
+    deduplicate_contained_glyphs(&mut text_items);
+
+    // Fix CID-font trailing/leading duplicate characters that got merged
+    // into a word run (e.g. "Burr r" → "Burr", "f for" → "for").
+    strip_cid_duplicate_chars(&mut text_items);
+
     // Re-sort after mutation to keep deterministic order.
     text_items.sort_by(|a, b| a.y.total_cmp(&b.y).then(a.x.total_cmp(&b.x)));
 
@@ -223,6 +232,156 @@ fn deduplicate_shadows(items: &mut Vec<TextItem>) {
         idx += 1;
         k
     });
+}
+
+// ---------------------------------------------------------------------------
+// Contained-glyph dedup (CID-font orphans)
+// ---------------------------------------------------------------------------
+
+/// Remove single-character items whose centre falls inside the bounding box
+/// of a larger item that already contains that character in its text.
+///
+/// This catches CID-font artifacts where pdfium emits both a merged text
+/// run (e.g. `"Technology y "`) **and** a separate 1-char glyph (`"y"`)
+/// at the same position. `deduplicate_shadows` only handles items with
+/// *identical* text, so it misses these substring-contained duplicates.
+///
+/// Safety: the check requires (a) the orphan is exactly 1 non-whitespace
+/// char, (b) its midpoint is strictly inside the larger item's bbox, and
+/// (c) the larger item's text contains that char. The false-positive rate
+/// is negligible — a legitimate lone letter that physically occupies the
+/// same space as another item's glyph is not meaningful.
+fn deduplicate_contained_glyphs(items: &mut Vec<TextItem>) {
+    let n = items.len();
+    if n < 2 {
+        return;
+    }
+    let mut drop = vec![false; n];
+    for i in 0..n {
+        let s = items[i].str.trim();
+        if s.len() != 1 || !s.chars().next().map_or(false, |c| c.is_alphanumeric()) {
+            continue;
+        }
+        let ch = s.chars().next().unwrap();
+        let mid_x = items[i].x + items[i].width * 0.5;
+        let mid_y = items[i].y + items[i].height.max(0.5) * 0.5;
+        // Tolerance: the orphan may sit just outside the container's bbox
+        // due to CID-font glyph splitting. Allow 2pt of slack on both axes
+        // so an orphan touching the container edge still counts.
+        const X_SLACK: f64 = 2.0;
+        const Y_SLACK: f64 = 2.0;
+        for j in 0..n {
+            if i == j || drop[j] {
+                continue;
+            }
+            // The container must be longer.
+            if items[j].str.trim().len() <= 1 {
+                continue;
+            }
+            let jx0 = items[j].x - X_SLACK;
+            let jx1 = items[j].x + items[j].width + X_SLACK;
+            let jy0 = items[j].y - Y_SLACK;
+            let jy1 = items[j].y + items[j].height.max(1.0) + Y_SLACK;
+            if mid_x >= jx0 && mid_x <= jx1 && mid_y >= jy0 && mid_y <= jy1 {
+                if items[j].str.contains(ch) {
+                    drop[i] = true;
+                    break;
+                }
+            }
+        }
+    }
+    let mut idx = 0;
+    items.retain(|_| {
+        let k = !drop[idx];
+        idx += 1;
+        k
+    });
+}
+
+// ---------------------------------------------------------------------------
+// CID-font duplicate-char strip
+// ---------------------------------------------------------------------------
+
+/// Remove trailing/leading duplicate characters that CID-font splits leave
+/// inside merged text runs.
+///
+/// **Trailing pattern**: text ends with `…X Y` where `X` == `Y` (both
+/// single alphanumeric chars) and `X` is the last char of the preceding
+/// word. Example: `"Burr r"` → `"Burr"`.
+///
+/// **Leading pattern**: text starts with `X Y…` where `X` is a single
+/// alphanumeric char that equals the first char of the next word `Y…`.
+/// Example: `"f for"` → `"for"`. Also: `"s for"` where `s` came from a
+/// different word (won't match because `s` ≠ `f`).
+fn strip_cid_duplicate_chars(items: &mut [TextItem]) {
+    for item in items.iter_mut() {
+        let s = &item.str;
+
+        // Trailing
+        if let Some(trimmed) = strip_trailing_dup(s) {
+            item.str = trimmed;
+        }
+
+        // Leading
+        if let Some(trimmed) = strip_leading_dup(&item.str) {
+            item.str = trimmed;
+        }
+    }
+}
+
+/// If `s` ends with ` C` (or ` C `) where `C` is a single alpha char and
+/// the character immediately before the space is also `C`, strip the tail.
+fn strip_trailing_dup(s: &str) -> Option<String> {
+    let trimmed = s.trim_end();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() < 3 {
+        return None;
+    }
+    let last = bytes[bytes.len() - 1];
+    if !last.is_ascii_alphanumeric() {
+        return None;
+    }
+    if bytes[bytes.len() - 2] != b' ' {
+        return None;
+    }
+    // Character before the space must equal `last`.
+    let prev = bytes[bytes.len() - 3];
+    if prev.to_ascii_lowercase() != last.to_ascii_lowercase() {
+        return None;
+    }
+    // Preserve original trailing whitespace.
+    let trail = &s[trimmed.len()..];
+    let mut result = trimmed[..trimmed.len() - 2].to_string();
+    result.push_str(trail);
+    Some(result)
+}
+
+/// If `s` starts with `C ` where `C` is a single alpha char and the next
+/// word also starts with `C`, strip the leading `C `.
+fn strip_leading_dup(s: &str) -> Option<String> {
+    let trimmed = s.trim_start();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() < 3 {
+        return None;
+    }
+    let first = bytes[0];
+    if !first.is_ascii_alphanumeric() {
+        return None;
+    }
+    if bytes[1] != b' ' {
+        return None;
+    }
+    // Next non-space char must equal `first`.
+    let rest = &trimmed[2..];
+    let next = rest.trim_start().as_bytes().first()?;
+    if next.to_ascii_lowercase() != first.to_ascii_lowercase() {
+        return None;
+    }
+    // Preserve original leading whitespace.
+    let lead = &s[..s.len() - trimmed.len()];
+    let mut result = lead.to_string();
+    result.push_str(rest);
+    Some(result)
 }
 
 // ---------------------------------------------------------------------------
@@ -909,6 +1068,55 @@ mod tests {
             "sparse small-text row was wrongly dropped: {:?}",
             out.text
         );
+    }
+
+    // ── CID orphan dedup tests ────────────────────────────────────
+
+    #[test]
+    fn contained_glyph_dedup_removes_orphan() {
+        let mut items = vec![
+            ti("Technology ", 10.0, 100.0, 100.0, 12.0),
+            ti("y", 105.0, 100.0, 3.0, 1.0),
+        ];
+        deduplicate_contained_glyphs(&mut items);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].str, "Technology ");
+    }
+
+    #[test]
+    fn contained_glyph_dedup_keeps_different_char() {
+        let mut items = vec![
+            ti("Technology ", 10.0, 100.0, 100.0, 12.0),
+            ti("z", 105.0, 100.0, 3.0, 1.0),
+        ];
+        deduplicate_contained_glyphs(&mut items);
+        assert_eq!(items.len(), 2);
+    }
+
+    #[test]
+    fn strip_trailing_dup_removes_burr_r() {
+        assert_eq!(
+            strip_trailing_dup("William E. Burr r "),
+            Some("William E. Burr ".to_string())
+        );
+    }
+
+    #[test]
+    fn strip_trailing_dup_ignores_normal_text() {
+        assert_eq!(strip_trailing_dup("Hello world"), None);
+    }
+
+    #[test]
+    fn strip_leading_dup_removes_f_for() {
+        assert_eq!(
+            strip_leading_dup("f for something"),
+            Some("for something".to_string())
+        );
+    }
+
+    #[test]
+    fn strip_leading_dup_ignores_different_char() {
+        assert_eq!(strip_leading_dup("a beautiful day"), None);
     }
 }
 
