@@ -1,1 +1,41 @@
-
+                                                                     FORM GST INV -1
+                                                                      (See rule 138A)
+wework                                        Generation of Invoice Reference Number
+ [Account Short Code                        [Account Name.                  [Location Name                   [Primary Member Name
+ IRN:
+ invoice Number                2022041483393                                                     Spaceman Reference Number
+ DocumentType                   Invoice                                                          Date of Document               14/04/2022
+                                                                        Details ofSupplier
+ Legal Name                            india Management Private Limited
+                                [O6AADCH8710)12K
+ Location                       [GURGAON
+laddress                        [SALCON PLATINA BUILDING, DLF SIKANDERPUR, SECTOR 28, SIKANDERPUR SIKANDERPUR GURGAON 122001,
+ Phone Number                   lo
+ Email 1D
+                                                                          of             to)
+ Name                                Labs Investment Manager Pvt Ltd
+laddress                       [TWO HORIZON CENTRE GOLF COURSE ROAD, DLF-5, SECTOR-43 GURGAON SIKANDERPUR GHOSI(68) 122002
+ State (name and code)
+ Place of Supply                HARYANA
+     of Supply                  826 Outward Supplies
+ lattracts Reverse Charge       False
+ [Supplies made to SEZ          False
+                OF                         Price per  Period  jPeriod                                               IState or Union                 {Total Line
+                         pas       Qty                Start   fend                                       tax        territory tax    Integrated tax  item Value
+                                                                                                   Rate    [Amt     [Rate   [Amt     [Rate   [amt
+      Day Pass Bundle
+      lat Two Horizon
+ 1    Centre, Golf       1997212   2.000   2700.00                    5400.00|810.00               9.0%             9.0%    413.10   0.0%    o.00    s416.20
+      Course Road 5
+      Day Passes                                                                        4590.00                                              jo.00
+     Invoice Value                                                             5416.20
+                                                                         Payment Details
+ Company Name                                             india Management Private Limited
+                                                   Wework.in@icici
+        Number
+ IFSC Code
+ Payment Reference
+Terms of Payment: Due Upon Receipt
+If you have any questions regarding this Invoice, kindly raise a support request or email us at the above ID
+In case Lower Tax Deduction Certificate (LTDC) is provided to you please do not deduct TDS
+This is a system generated Invoice and does not require signature
