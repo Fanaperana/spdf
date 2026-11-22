@@ -156,10 +156,27 @@ pub(crate) fn detect(rulings: &[Ruling], items: &[TextItem]) -> Vec<RuledTable> 
         .into_iter()
         .map(|(x, y1, y2)| VLine { x, y1, y2 })
         .collect();
-    if hs.len() < 2 || vs.len() < 2 || hs.len() * vs.len() > MAX_PAIRS {
+    if hs.len() < 2 || hs.len() * vs.len().max(1) > MAX_PAIRS {
         return Vec::new();
     }
+    let mut out = if vs.len() >= 2 {
+        grid_tables(&hs, &vs, items)
+    } else {
+        Vec::new()
+    };
+    // Tables ruled only horizontally (top / header / bottom rules), outside
+    // any bordered grid.
+    for t in rule_bounded_tables(&hs, &vs, items) {
+        if !out.iter().any(|k| t.top < k.bottom && k.top < t.bottom) {
+            out.push(t);
+        }
+    }
+    out.sort_by(|a, b| a.top.total_cmp(&b.top));
+    out
+}
 
+/// Bordered tables: connected grids of horizontal and vertical rules.
+fn grid_tables(hs: &[HLine], vs: &[VLine], items: &[TextItem]) -> Vec<RuledTable> {
     // Connected components of intersecting rules.
     let n = hs.len() + vs.len();
     let mut parent: Vec<usize> = (0..n).collect();
@@ -201,6 +218,327 @@ pub(crate) fn detect(rulings: &[Ruling], items: &[TextItem]) -> Vec<RuledTable> 
         kept.push(t);
     }
     kept
+}
+
+/// Horizontal rules of the same extent stacked down the page bound a
+/// table typeset without vertical rules (the booktabs / academic style:
+/// a top rule, a rule under the header, a bottom rule). Each stack is a
+/// candidate table whose columns come from the whitespace gutters of its
+/// text. A stack that does not read as a table is retried as two stacks
+/// split at its tallest band, since two such tables of the same width on
+/// one page (with a caption or prose between them) share an extent.
+fn rule_bounded_tables(hs: &[HLine], vs: &[VLine], items: &[TextItem]) -> Vec<RuledTable> {
+    const SAME_EXTENT: f64 = 3.0;
+    // Rules touched by a vertical rule belong to a grid (bordered table,
+    // chart frame), which `grid_tables` judges.
+    let free = |h: &HLine| {
+        !vs.iter().any(|v| {
+            v.x >= h.x1 - JOIN && v.x <= h.x2 + JOIN && h.y >= v.y1 - JOIN && h.y <= v.y2 + JOIN
+        })
+    };
+    let mut sorted: Vec<HLine> = hs.iter().copied().filter(free).collect();
+    sorted.sort_by(|a, b| a.y.total_cmp(&b.y));
+    let mut stacks: Vec<Vec<HLine>> = Vec::new();
+    for h in sorted {
+        if h.x2 - h.x1 < 40.0 {
+            continue;
+        }
+        let same = |s: &&mut Vec<HLine>| {
+            let l = s[s.len() - 1];
+            (l.x1 - h.x1).abs() <= SAME_EXTENT && (l.x2 - h.x2).abs() <= SAME_EXTENT
+        };
+        match stacks.iter_mut().find(same) {
+            Some(s) => s.push(h),
+            None => stacks.push(vec![h]),
+        }
+    }
+    let mut out = Vec::new();
+    let mut todo: Vec<Vec<HLine>> = stacks.into_iter().filter(|s| s.len() >= 2).collect();
+    while let Some(stack) = todo.pop() {
+        if let Some(t) = band_table(&stack, hs, items) {
+            out.push(t);
+            continue;
+        }
+        if stack.len() < 3 {
+            continue;
+        }
+        let tallest = (0..stack.len() - 1)
+            .max_by(|&a, &b| {
+                let ga = stack[a + 1].y - stack[a].y;
+                let gb = stack[b + 1].y - stack[b].y;
+                ga.total_cmp(&gb)
+            })
+            .unwrap_or(0);
+        let (upper, lower) = stack.split_at(tallest + 1);
+        for part in [upper, lower] {
+            if part.len() >= 2 {
+                todo.push(part.to_vec());
+            }
+        }
+    }
+    out
+}
+
+/// Build a table from the text between the first and last rule of
+/// `rules` (sorted top to bottom, same horizontal extent). `all_rules`
+/// are every horizontal rule on the page.
+fn band_table(rules: &[HLine], all_rules: &[HLine], items: &[TextItem]) -> Option<RuledTable> {
+    /// Mean words per filled cell above which the band holds prose.
+    const MAX_WORDS_PER_CELL: f64 = 6.0;
+    let top = rules[0].y;
+    let bottom = rules[rules.len() - 1].y;
+    let left = rules.iter().map(|r| r.x1).fold(f64::INFINITY, f64::min);
+    let right = rules.iter().map(|r| r.x2).fold(f64::NEG_INFINITY, f64::max);
+    if bottom - top < 8.0 {
+        return None;
+    }
+    let mut words: Vec<Word> = Vec::new();
+    for it in items {
+        if it.str.trim().is_empty() || it.r.unwrap_or(0) != 0 {
+            continue;
+        }
+        let cx = it.x + it.width / 2.0;
+        let cy = it.y + it.height / 2.0;
+        if cx < left - JOIN || cx > right + JOIN || cy <= top || cy >= bottom {
+            continue;
+        }
+        words.extend(item_words(it));
+    }
+    if words.len() < 3 {
+        return None;
+    }
+    let mut heights: Vec<f64> = words.iter().map(|w| w.h).collect();
+    heights.sort_by(f64::total_cmp);
+    let text_h = heights[heights.len() / 2];
+    let lines = text_lines(words);
+    if lines.len() < 2 || lines.iter().any(|l| is_prose_line(l, text_h)) {
+        return None;
+    }
+    // Table rules run between text lines; chart gridlines run through
+    // their axis labels (which may sit just outside the gridlines' ends).
+    let inner: Vec<&HLine> = all_rules
+        .iter()
+        .filter(|r| r.y > top + 1.0 && r.y < bottom - 1.0)
+        .filter(|r| r.x2.min(right) - r.x1.max(left) >= 0.5 * (right - left))
+        .collect();
+    let reach = 4.0 * text_h;
+    let struck = inner
+        .iter()
+        .filter(|r| {
+            items.iter().any(|it| {
+                !it.str.trim().is_empty()
+                    && (it.y + it.height / 2.0 - r.y).abs() < 0.5 * it.height.max(text_h)
+                    && it.x + it.width > r.x1 - reach
+                    && it.x < r.x2 + reach
+            })
+        })
+        .count();
+    if struck > 0 && struck * 2 >= inner.len() {
+        return None;
+    }
+    // Lines above the rule under the header form one header row.
+    let header_end = if rules.len() >= 3 {
+        let mid = rules[1].y;
+        lines.iter().take_while(|l| l[0].y < mid).count()
+    } else {
+        0
+    };
+    let body = &lines[header_end..];
+    let gutter_src = if body.len() >= 2 { body } else { &lines[..] };
+    let bounds = column_bounds(gutter_src, left, right);
+    let ncols = bounds.len() + 1;
+    let col_of = |w: &Word| bounds.iter().filter(|&&b| w.x > b).count();
+
+    let mut words_all = Vec::new();
+    let mut rows: Vec<Vec<Vec<Word>>> = Vec::new();
+    let mut header_rows = 0;
+    for (i, line) in lines.into_iter().enumerate() {
+        let mut cells: Vec<Vec<Word>> = (0..ncols).map(|_| Vec::new()).collect();
+        for w in line {
+            words_all.push(w.text.clone());
+            let c = col_of(&w);
+            cells[c].push(w);
+        }
+        let filled = cells.iter().filter(|c| !c.is_empty()).count();
+        let in_header = i < header_end;
+        // Header lines merge into one row; a body line with an empty key
+        // column and few cells continues the row above (a wrapped cell).
+        let fold = if in_header {
+            i > 0
+        } else {
+            ncols > 1 && rows.len() > header_rows && cells[0].is_empty() && filled * 2 <= ncols
+        };
+        if fold {
+            let prev = rows.last_mut().expect("row above");
+            for (p, c) in prev.iter_mut().zip(cells) {
+                p.extend(c);
+            }
+        } else {
+            rows.push(cells);
+            if in_header {
+                header_rows = 1;
+            }
+        }
+    }
+    let rows: Vec<Vec<String>> = rows
+        .into_iter()
+        .map(|r| r.into_iter().map(cell_text).collect())
+        .collect();
+    if rows.len() < 2 {
+        return None;
+    }
+    let filled: Vec<&String> = rows.iter().flatten().filter(|c| !c.is_empty()).collect();
+    let nwords: usize = filled.iter().map(|c| c.split_whitespace().count()).sum();
+    if nwords as f64 > MAX_WORDS_PER_CELL * filled.len() as f64 {
+        return None;
+    }
+    if ncols == 1 {
+        // A ruled single-column list needs its header rule and short,
+        // list-like entries.
+        if header_end == 0 || rows.len() < 3 {
+            return None;
+        }
+    } else {
+        if (filled.len() as f64) < MIN_FILL * (rows.len() * ncols) as f64 {
+            return None;
+        }
+        if !rows
+            .iter()
+            .any(|r| r.iter().filter(|c| !c.is_empty()).count() >= 2)
+        {
+            return None;
+        }
+    }
+    Some(RuledTable {
+        top,
+        bottom,
+        rows,
+        words: words_all,
+    })
+}
+
+/// Group words into visual lines, top to bottom.
+fn text_lines(mut words: Vec<Word>) -> Vec<Vec<Word>> {
+    words.sort_by(|a, b| a.y.total_cmp(&b.y).then(a.x.total_cmp(&b.x)));
+    let mut lines: Vec<Vec<Word>> = Vec::new();
+    for w in words {
+        match lines.last_mut() {
+            Some(l) if (w.y - l[0].y).abs() < 0.5 * w.h.min(l[0].h) => l.push(w),
+            _ => lines.push(vec![w]),
+        }
+    }
+    lines
+}
+
+/// Column boundaries (x positions, ascending) from the vertical gutters
+/// of `lines`: strips at least one text height wide that are free of ink
+/// on all lines but a few (a spanning title, one cell estimated too
+/// wide), with inked columns on both sides.
+fn column_bounds(lines: &[Vec<Word>], left: f64, right: f64) -> Vec<f64> {
+    const BIN: f64 = 0.5;
+    let x0 = left.min(
+        lines
+            .iter()
+            .flatten()
+            .map(|w| w.x0)
+            .fold(f64::INFINITY, f64::min),
+    );
+    let x1 = right.max(
+        lines
+            .iter()
+            .flatten()
+            .map(|w| w.x1)
+            .fold(f64::NEG_INFINITY, f64::max),
+    );
+    let nbins = (((x1 - x0) / BIN).ceil() as usize).clamp(1, 20_000);
+    let mut ink = vec![0usize; nbins];
+    for line in lines {
+        let mut hit = vec![false; nbins];
+        for w in line {
+            let a = (((w.x0 - x0) / BIN).floor().max(0.0) as usize).min(nbins - 1);
+            let b = (((w.x1 - x0) / BIN).ceil().max(0.0) as usize).min(nbins);
+            for h in &mut hit[a..b] {
+                *h = true;
+            }
+        }
+        for (k, h) in ink.iter_mut().zip(hit) {
+            *k += h as usize;
+        }
+    }
+    let allow = lines.len() / 4;
+    let mut hs: Vec<f64> = lines.iter().flatten().map(|w| w.h).collect();
+    hs.sort_by(f64::total_cmp);
+    let min_gap = hs[hs.len() / 2];
+    // Blank strips between inked columns, plus strips crossed only by a
+    // few lines between well-inked columns.
+    let strict = blank_runs(&ink, 0, min_gap / BIN);
+    let mut runs = strict.clone();
+    if allow > 0 {
+        for r in blank_runs(&ink, allow, min_gap / BIN) {
+            if !strict.iter().any(|s| s.0 < r.1 && r.0 < s.1) {
+                runs.push(r);
+            }
+        }
+    }
+    let mut out: Vec<f64> = runs
+        .into_iter()
+        .map(|(s, e)| x0 + (s + e) as f64 / 2.0 * BIN)
+        .collect();
+    out.sort_by(f64::total_cmp);
+    out
+}
+
+/// Runs `[s, e)` of bins with `ink <= allow`, at least `min_len` bins
+/// long, that have a bin with more ink on both sides.
+fn blank_runs(ink: &[usize], allow: usize, min_len: f64) -> Vec<(usize, usize)> {
+    let low: Vec<bool> = ink.iter().map(|&k| k <= allow).collect();
+    let (Some(first), Some(last)) = (low.iter().position(|l| !l), low.iter().rposition(|l| !l))
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut i = first;
+    while i <= last {
+        if !low[i] {
+            i += 1;
+            continue;
+        }
+        let s = i;
+        while low[i] {
+            i += 1;
+        }
+        if (i - s) as f64 >= min_len {
+            out.push((s, i));
+        }
+    }
+    out
+}
+
+/// Does a line of `words` hold running prose (a caption or paragraph
+/// caught between two tables' rules)? Prose is a long run of closely
+/// spaced words, mostly starting in lowercase.
+fn is_prose_line(line: &[Word], gap: f64) -> bool {
+    const MIN_WORDS: usize = 8;
+    let mut run: Vec<&Word> = Vec::new();
+    let check = |run: &[&Word]| {
+        run.len() >= MIN_WORDS
+            && run
+                .iter()
+                .filter(|w| w.text.chars().next().is_some_and(char::is_lowercase))
+                .count()
+                * 2
+                >= run.len()
+    };
+    for w in line {
+        if run.last().is_some_and(|p| w.x0 - p.x1 >= gap) {
+            if check(&run) {
+                return true;
+            }
+            run.clear();
+        }
+        run.push(w);
+    }
+    check(&run)
 }
 
 /// One word of a text item with its estimated position.
@@ -809,5 +1147,91 @@ mod tests {
                 vec!["2", "Small", "9"],
             ]
         );
+    }
+
+    /// Top, header and bottom rules only (booktabs style), 300pt wide.
+    fn booktabs(rows: &[&[(&str, f64)]]) -> (Vec<Ruling>, Vec<TextItem>) {
+        let mut items = Vec::new();
+        for (r, row) in rows.iter().enumerate() {
+            for &(s, x) in row.iter() {
+                items.push(item(s, x, 104.0 + 14.0 * r as f64));
+            }
+        }
+        let bottom = 104.0 + 14.0 * rows.len() as f64;
+        let rules = vec![
+            h(100.0, 0.0, 300.0),
+            h(116.0, 0.0, 300.0),
+            h(bottom, 0.0, 300.0),
+        ];
+        (rules, items)
+    }
+
+    #[test]
+    fn horizontally_ruled_table_uses_gutters_for_columns() {
+        let (rules, mut items) = booktabs(&[
+            &[("Model", 5.0), ("Score", 120.0), ("Size", 220.0)],
+            &[("Cand 1", 5.0), ("73.7", 120.0), ("7B", 220.0)],
+            &[("Cand 2", 5.0), ("71.2", 120.0), ("13B", 220.0)],
+            &[("Base", 5.0), ("70.0", 120.0), ("7B", 220.0)],
+        ]);
+        items.push(item("Prose below the table.", 5.0, 200.0));
+        let t = detect(&rules, &items);
+        assert_eq!(t.len(), 1);
+        assert_eq!(
+            t[0].rows,
+            vec![
+                vec!["Model", "Score", "Size"],
+                vec!["Cand 1", "73.7", "7B"],
+                vec!["Cand 2", "71.2", "13B"],
+                vec!["Base", "70.0", "7B"],
+            ]
+        );
+    }
+
+    #[test]
+    fn spanning_title_line_does_not_hide_a_gutter() {
+        let rules = vec![h(100.0, 0.0, 300.0), h(175.0, 0.0, 300.0)];
+        let items = vec![
+            item("Fish on the Red List", 5.0, 104.0),
+            item("Potosi", 5.0, 118.0),
+            item("C. alvarezi", 150.0, 118.0),
+            item("La Palma", 5.0, 132.0),
+            item("C. longidorsalis", 150.0, 132.0),
+            item("Golden", 5.0, 146.0),
+            item("S. francesae", 150.0, 146.0),
+            item("Butterfly", 5.0, 160.0),
+            item("A. splendens", 150.0, 160.0),
+        ];
+        let t = detect(&rules, &items);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].rows.len(), 5);
+        assert_eq!(t[0].rows[2], vec!["La Palma", "C. longidorsalis"]);
+    }
+
+    #[test]
+    fn prose_between_rules_is_not_a_table() {
+        let (rules, items) = booktabs(&[
+            &[("A note", 5.0)],
+            &[("this is a long line of ordinary running text set", 5.0)],
+            &[("in a box with rules above and below it", 5.0)],
+        ]);
+        assert!(detect(&rules, &items).is_empty());
+    }
+
+    #[test]
+    fn chart_gridlines_are_not_a_table() {
+        // Gridlines every 20pt with their tick labels centred on them.
+        let mut rules = Vec::new();
+        let mut items = Vec::new();
+        for (i, label) in ["80", "60", "40", "20"].iter().enumerate() {
+            let y = 120.0 + 20.0 * i as f64;
+            rules.push(h(y, 0.0, 300.0));
+            items.push(item(label, 5.0, y - 5.0));
+            items.push(item("12", 100.0, y + 5.0));
+            items.push(item("34", 200.0, y + 5.0));
+        }
+        rules.push(h(100.0, 0.0, 300.0));
+        rules.push(h(200.0, 0.0, 300.0));
+        assert!(detect(&rules, &items).is_empty());
     }
 }
