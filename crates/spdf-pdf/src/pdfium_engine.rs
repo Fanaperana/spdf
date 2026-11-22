@@ -181,6 +181,8 @@ pub struct PdfiumDoc {
     bytes: Vec<u8>,
     num_pages: u32,
     password: Option<String>,
+    /// CID -> text maps for fonts without `/ToUnicode`, built on first need.
+    font_maps: OnceLock<crate::cidfont::FontMaps>,
 }
 
 impl PdfDocumentHandle for PdfiumDoc {
@@ -237,6 +239,7 @@ impl PdfEngine for PdfiumEngine {
             bytes: bytes.to_vec(),
             num_pages,
             password: password.map(str::to_owned),
+            font_maps: OnceLock::new(),
         })
     }
 
@@ -296,10 +299,25 @@ impl PdfEngine for PdfiumEngine {
                 items.push(ti);
             }
 
+            // Composite fonts without a ToUnicode CMap come out as raw
+            // character codes; recover their text from the embedded font.
+            let mut rebuild = None;
+            if items
+                .iter()
+                .any(|it| crate::cidfont::looks_like_raw_codes(&it.str))
+            {
+                let maps = doc
+                    .font_maps
+                    .get_or_init(|| crate::cidfont::recover_font_maps(&doc.bytes));
+                if !maps.is_empty() {
+                    rebuild = Some(maps);
+                }
+            }
+
             // Rectangle-based segments duplicate overlapping glyphs and keep
             // RTL scripts in visual order; rebuild such pages from glyphs.
-            if items.iter().any(|it| crate::rtl::has_rtl(&it.str)) {
-                let runs = crate::rtl::build_runs(page_glyphs(&text_page, height));
+            if rebuild.is_some() || items.iter().any(|it| crate::rtl::has_rtl(&it.str)) {
+                let runs = crate::rtl::build_runs(page_glyphs(&text_page, height, rebuild));
                 if !runs.is_empty() {
                     items = runs
                         .into_iter()
@@ -473,18 +491,37 @@ fn form_widgets(
 
 /// All non-whitespace, non-generated glyphs of a page in content order,
 /// converted to top-left coordinates.
+///
+/// With `font_maps`, characters drawn in a font that has a recovered CID map
+/// take their text from it (PDFium reports such characters as raw codes).
 fn page_glyphs(
     text_page: &pdfium_render::prelude::PdfPageText<'_>,
     page_height: f64,
+    font_maps: Option<&crate::cidfont::FontMaps>,
 ) -> Vec<crate::rtl::Glyph> {
     let mut out = Vec::new();
+    let mut font_known: std::collections::HashMap<String, bool> = Default::default();
     for ch in text_page.chars().iter() {
         if ch.is_generated().unwrap_or(false) {
             continue;
         }
-        let Some(text) = ch.unicode_string() else {
+        let Some(mut text) = ch.unicode_string() else {
             continue;
         };
+        if let Some(maps) = font_maps {
+            let name = ch.font_name();
+            let known = *font_known
+                .entry(name.clone())
+                .or_insert_with(|| maps.has_font(&name));
+            if known {
+                let mut cs = text.chars();
+                if let (Some(c), None) = (cs.next(), cs.next()) {
+                    if let Some(mapped) = maps.lookup(&name, c as u32) {
+                        text = mapped.to_string();
+                    }
+                }
+            }
+        }
         if text.is_empty() || text.chars().all(|c| c.is_whitespace() || c.is_control()) {
             continue;
         }

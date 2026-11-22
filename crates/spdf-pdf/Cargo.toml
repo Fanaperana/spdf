@@ -24,6 +24,8 @@ tracing.workspace = true
 pdfium-render.workspace = true
 image.workspace = true
 thiserror.workspace = true
+flate2.workspace = true
+ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
 
 [build-dependencies]
 ureq = { version = "2.12", features = ["tls"] }

@@ -4,6 +4,8 @@
 
 #![warn(clippy::all)]
 
+#[cfg_attr(not(feature = "pdfium"), allow(dead_code))]
+mod cidfont;
 mod engine;
 #[cfg_attr(not(feature = "pdfium"), allow(dead_code))]
 mod form;
