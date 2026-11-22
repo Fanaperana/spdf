@@ -294,8 +294,23 @@ impl PdfEngine for PdfiumEngine {
                 // run contains (x-height vs. ascenders), which makes it a
                 // noisy signal for heading detection.
                 let (font_size, font_name) = segment_font(&segment);
-                ti.font_size = Some(font_size.unwrap_or(item_h).max(1.0));
+                let size = font_size.unwrap_or(item_h).max(1.0);
+                ti.font_size = Some(size);
                 ti.font_name = font_name;
+                // Table rows drawn as one run come back as one segment;
+                // cut it at column gutters so cells stay apart.
+                if crate::gutter::suspicious(&ti.str, item_w, size) {
+                    if let Some(pieces) = segment_gutters(&segment, &ti.str, size) {
+                        for p in pieces {
+                            let mut part =
+                                TextItem::new(p.text, p.left, y_top, p.right - p.left, ti.height);
+                            part.font_size = ti.font_size;
+                            part.font_name = ti.font_name.clone();
+                            items.push(part);
+                        }
+                        continue;
+                    }
+                }
                 items.push(ti);
             }
 
@@ -672,6 +687,39 @@ fn page_glyphs(
         });
     }
     out
+}
+
+/// Split a segment at column gutters using its glyphs' horizontal extents.
+fn segment_gutters(
+    segment: &pdfium_render::prelude::PdfPageTextSegment<'_>,
+    text: &str,
+    font_size: f64,
+) -> Option<Vec<crate::gutter::Piece>> {
+    let bounds = segment.bounds();
+    let (top, bottom) = (bounds.top().value, bounds.bottom().value);
+    let (left, right) = (bounds.left().value, bounds.right().value);
+    let chars = segment.chars().ok()?;
+    let mut glyphs = Vec::new();
+    for ch in chars.iter() {
+        if ch.is_generated().unwrap_or(false) {
+            continue;
+        }
+        let Some(c) = ch.unicode_char() else {
+            continue;
+        };
+        if c.is_whitespace() || c.is_control() {
+            continue;
+        }
+        let rect = ch.loose_bounds().or_else(|_| ch.tight_bounds()).ok()?;
+        // `chars()` is a fuzzy index range; keep glyphs inside the segment.
+        let cx = (rect.left().value + rect.right().value) / 2.0;
+        let cy = (rect.top().value + rect.bottom().value) / 2.0;
+        if cx < left - 0.5 || cx > right + 0.5 || cy < bottom - 0.5 || cy > top + 0.5 {
+            continue;
+        }
+        glyphs.push((rect.left().value as f64, rect.right().value as f64));
+    }
+    crate::gutter::split(text, &glyphs, font_size)
 }
 
 /// Font size and name of the first non-whitespace glyph in a text segment.
