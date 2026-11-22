@@ -665,6 +665,12 @@ const MIN_COLUMN_GUTTER: usize = 2;
 const MAX_ALIGNED_GUTTERS: usize = 8;
 /// Fewest rows that must carry text on each side of a gutter.
 const MIN_GUTTER_ROWS: usize = 3;
+/// Narrowest gutter, in char units, between two edges of justified text.
+const MIN_NARROW_GUTTER_CU: f64 = 1.5;
+/// Gutters narrower than this many char units need facing text edges.
+const WIDE_GUTTER_CU: f64 = 2.5;
+/// Fewest rows whose text runs flush up to both sides of a narrow gutter.
+const MIN_FLUSH_ROWS: usize = 4;
 
 /// Vertical whitespace gutters of the page in PDF points, as split
 /// positions (the middle of each gutter), left to right.
@@ -701,7 +707,7 @@ fn find_gutters(items: &[TextItem], rows: &[Row], char_unit: f64, page_left: f64
         }
     }
     let tolerance = (rows.len() / 10).max(1);
-    let min_width = char_unit * 2.5;
+    let min_width = char_unit * MIN_NARROW_GUTTER_CU;
     let mut out = Vec::new();
     let mut b = 0;
     while b < bins {
@@ -725,17 +731,26 @@ fn find_gutters(items: &[TextItem], rows: &[Row], char_unit: f64, page_left: f64
         // crosses it disqualifies nothing (tolerated above) but counts for
         // neither side. Columns whose baselines do not line up yield
         // one-sided rows only, so both kinds count.
-        let (mut left_rows, mut right_rows) = (0usize, 0usize);
+        //
+        // A gap narrower than a usual column gap is only a gutter when it
+        // is bounded by two text edges, as between justified columns set
+        // close together: several rows must run flush up to both sides.
+        let narrow = x1 - x0 < char_unit * WIDE_GUTTER_CU;
+        let (mut left_rows, mut right_rows, mut flush_rows) = (0usize, 0usize, 0usize);
         for row in rows {
             let mut left = false;
             let mut rgt = false;
             let mut crosses = false;
+            let (mut left_flush, mut right_flush) = (false, false);
             for &i in row {
                 let it = &items[i];
-                if it.x + it.width.max(0.0) <= x0 + bin_w {
+                let end = it.x + it.width.max(0.0);
+                if end <= x0 + bin_w {
                     left = true;
+                    left_flush |= end >= x0 - char_unit;
                 } else if it.x >= x1 - bin_w {
                     rgt = true;
+                    right_flush |= it.x <= x1 + char_unit;
                 } else {
                     crosses = true;
                 }
@@ -743,9 +758,13 @@ fn find_gutters(items: &[TextItem], rows: &[Row], char_unit: f64, page_left: f64
             if !crosses {
                 left_rows += usize::from(left);
                 right_rows += usize::from(rgt);
+                flush_rows += usize::from(left_flush && right_flush);
             }
         }
-        if left_rows >= MIN_GUTTER_ROWS && right_rows >= MIN_GUTTER_ROWS {
+        if left_rows >= MIN_GUTTER_ROWS
+            && right_rows >= MIN_GUTTER_ROWS
+            && (!narrow || flush_rows >= MIN_FLUSH_ROWS)
+        {
             out.push((x0 + x1) / 2.0);
         }
     }
@@ -840,7 +859,16 @@ fn render_row_grid(
             let pr = prev_right.unwrap_or(it.x);
             let gap_pts = it.x - pr;
             let cur_cols = out.chars().count() - row_start;
-            if gap_pts > column_gap {
+            // A gap across an aligned gutter separates columns however
+            // narrow it is in points.
+            let measured = measure.as_ref().map(|(g, _)| *g);
+            let across_gutter = gap_pts > space_gap
+                && shifts
+                    .iter()
+                    .map(|&(g, _)| g)
+                    .chain(measured)
+                    .any(|g| pr <= g && it.x >= g);
+            if gap_pts > column_gap || across_gutter {
                 if let Some((g, end)) = measure.as_mut() {
                     if pr <= *g && it.x >= *g {
                         let trailing = out.chars().rev().take_while(|&c| c == ' ').count();
@@ -997,6 +1025,52 @@ mod tests {
             .collect();
         assert_eq!(starts.len(), 7, "{}", out.text);
         assert!(starts.iter().all(|s| *s == starts[0]), "{}", out.text);
+    }
+
+    #[test]
+    fn narrow_gutter_between_justified_columns_is_kept() {
+        // Justified columns set only ~2 glyphs apart (x 10..210 and
+        // 219..419, 5pt glyphs): the 9pt gap is narrower than a usual
+        // column gap, but text runs flush up to both sides on every row,
+        // so it must still render as a gutter, not a word space.
+        let mut items = Vec::new();
+        for r in 0..6 {
+            let y = 100.0 + 15.0 * r as f64;
+            items.push(ti(&"l".repeat(40), 10.0, y, 200.0, 10.0));
+            items.push(ti(&"r".repeat(40), 219.0, y, 200.0, 10.0));
+        }
+        let rows: Vec<Row> = (0..6).map(|r| vec![2 * r, 2 * r + 1]).collect();
+        assert_eq!(find_gutters(&items, &rows, 5.0, 10.0).len(), 1);
+        let page = PageInput {
+            page_num: 1,
+            width: 500.0,
+            height: 700.0,
+            text_items: items,
+        };
+        let out = project_page(page, false, false);
+        for line in out.text.lines() {
+            assert!(line.contains("l  r"), "gutter lost: {:?}", out.text);
+        }
+    }
+
+    #[test]
+    fn narrow_gap_without_flush_edges_is_no_gutter() {
+        // A narrow empty band (210..219) left only where the ragged ends
+        // of different rows happen to meet: no row runs flush up to both
+        // sides of it, so it is not a column gutter.
+        let mut items = Vec::new();
+        for r in 0..6 {
+            let y = 100.0 + 15.0 * r as f64;
+            if r % 2 == 0 {
+                items.push(ti(&"a".repeat(40), 10.0, y, 200.0, 10.0));
+                items.push(ti(&"b".repeat(20), 300.0, y, 100.0, 10.0));
+            } else {
+                items.push(ti(&"c".repeat(28), 10.0, y, 140.0, 10.0));
+                items.push(ti(&"d".repeat(36), 219.0, y, 180.0, 10.0));
+            }
+        }
+        let rows: Vec<Row> = (0..6).map(|r| vec![2 * r, 2 * r + 1]).collect();
+        assert!(find_gutters(&items, &rows, 5.0, 10.0).is_empty());
     }
 
     #[test]
