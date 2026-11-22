@@ -10,3 +10,9 @@ example/avil.pdf
 # libtesseract downloads them.
 *.traineddata
 dist/
+
+# benchmark harness (bench/): local venv, caches, generated corpus
+/bench/.venv/
+/bench/.cache/
+/bench/edge/corpus/
+__pycache__/

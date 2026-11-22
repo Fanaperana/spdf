@@ -1,0 +1,19 @@
+# Benchmark harness deps (dev-only; not shipped with spdf).
+# LiteParse is pinned so scoreboard numbers stay comparable over time;
+# bump deliberately and re-run with --refresh-liteparse.
+liteparse==2.19.0
+rapidfuzz==3.14.6
+psutil==7.2.2
+# opendataloader-bench scorer
+apted==1.0.3
+beautifulsoup4==4.15.0
+lxml==6.1.3
+py-cpuinfo==9.0.0
+# edge-corpus generator
+fpdf2==2.9.0
+uharfbuzz==0.57.0
+pypdf==7.1.1
+cryptography==50.0.2
+reportlab==5.1.0
+pypdfium2==5.15.2
+pillow==13.0.0
