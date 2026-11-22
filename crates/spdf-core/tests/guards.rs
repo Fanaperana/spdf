@@ -329,8 +329,8 @@ fn zip_bomb_guard_rejects_fuzz_corpus_oom_artifact() {
 /// parsing succeeds (the actual F1 lift is checked by the benchmark).
 #[test]
 fn acroform_pdf_auto_enables_preserve_small() {
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../example/corpus/irs-f1040.pdf");
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../example/corpus/irs-f1040.pdf");
     if !fixture.exists() {
         eprintln!("skipping: fixture not found at {}", fixture.display());
         return;

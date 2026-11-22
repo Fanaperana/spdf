@@ -313,8 +313,7 @@ fn run_parse_streaming(
 ) -> Result<()> {
     let mut writer: Box<dyn Write> = match output {
         Some(path) => Box::new(
-            std::fs::File::create(path)
-                .with_context(|| format!("opening {}", path.display()))?,
+            std::fs::File::create(path).with_context(|| format!("opening {}", path.display()))?,
         ),
         None => Box::new(io::stdout().lock()),
     };

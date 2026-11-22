@@ -890,9 +890,7 @@ fn strip_ocr_pipe_artifacts(text: &str) -> String {
 /// `/AcroForm` is a reserved PDF dictionary key.
 fn scan_has_acroform(bytes: &[u8]) -> bool {
     const KEY: &[u8] = b"/AcroForm";
-    bytes
-        .windows(KEY.len())
-        .any(|w| w == KEY)
+    bytes.windows(KEY.len()).any(|w| w == KEY)
 }
 
 /// Scan raw PDF bytes for the largest **directly-declared** `/Length N`

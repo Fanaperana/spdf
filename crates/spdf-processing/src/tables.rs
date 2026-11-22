@@ -97,7 +97,12 @@ pub fn detect_tables(items: &[TextItem]) -> Vec<Table> {
         if run_len >= MIN_TABLE_ROWS {
             columns.sort_by(f64::total_cmp);
             collapse_near_columns(&mut columns);
-            tables.push(build_table(&rows[i..j], items, &columns, tables.len() as u32 + 1));
+            tables.push(build_table(
+                &rows[i..j],
+                items,
+                &columns,
+                tables.len() as u32 + 1,
+            ));
         }
         i = j.max(i + 1);
     }
@@ -157,11 +162,7 @@ fn median_char_width(items: &[TextItem]) -> f64 {
 /// If the row looks tabular (≥ MIN_ROW_ITEMS with gaps ≥ threshold
 /// between at least MIN_ROW_ITEMS - 1 neighbours), return the x-centres
 /// of each cell. Otherwise return None.
-fn row_column_centres(
-    row: &[usize],
-    items: &[TextItem],
-    gap_threshold: f64,
-) -> Option<Vec<f64>> {
+fn row_column_centres(row: &[usize], items: &[TextItem], gap_threshold: f64) -> Option<Vec<f64>> {
     if row.len() < MIN_ROW_ITEMS {
         return None;
     }
@@ -207,12 +208,7 @@ fn merge_columns(dst: &mut Vec<f64>, src: &[f64]) {
     }
 }
 
-fn build_table(
-    rows: &[Vec<usize>],
-    items: &[TextItem],
-    columns: &[f64],
-    id: u32,
-) -> Table {
+fn build_table(rows: &[Vec<usize>], items: &[TextItem], columns: &[f64], id: u32) -> Table {
     let mut xmin = f64::INFINITY;
     let mut xmax = f64::NEG_INFINITY;
     let mut ymin = f64::INFINITY;
