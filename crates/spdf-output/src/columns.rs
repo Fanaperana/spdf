@@ -130,18 +130,25 @@ fn is_prose(side: &[Line]) -> bool {
         && full as f64 >= n * MIN_FULL_SHARE
 }
 
-/// Blank rows inside `side` (between its first and last text line) facing
-/// text on `other`. Prose columns only have them at paragraph breaks; the
-/// label column of a table has one for every wrapped or grouped row.
+/// Holes inside `side` (between its first and last text line): maximal runs
+/// of blank rows that face text on `other`. Prose columns only have them at
+/// paragraph breaks or where a figure interrupts the column (one long run);
+/// the label column of a table has one for every wrapped or grouped row.
 fn too_many_holes(side: &[Line], other: &[Line]) -> bool {
     let Some(first) = side.iter().position(|l| !is_blank(l)) else {
         return false;
     };
     let last = side.iter().rposition(|l| !is_blank(l)).unwrap_or(first);
     let nonblank = side.iter().filter(|l| !is_blank(l)).count();
-    let holes = (first..=last)
-        .filter(|&i| is_blank(&side[i]) && other.get(i).is_some_and(|o| !is_blank(o)))
-        .count();
+    let mut holes = 0usize;
+    let mut in_hole = false;
+    for (i, line) in side.iter().enumerate().take(last + 1).skip(first) {
+        let hole = is_blank(line) && other.get(i).is_some_and(|o| !is_blank(o));
+        if hole && !in_hole {
+            holes += 1;
+        }
+        in_hole = hole;
+    }
     holes as f64 > nonblank as f64 * MAX_HOLE_SHARE
 }
 
@@ -332,6 +339,38 @@ sustainability
 3. Envisioning sustainable futures        3.1 Futures literacy
                                           3.2 Adaptability";
         assert_eq!(reflow_columns(text), text);
+    }
+
+    #[test]
+    fn figure_gap_in_one_column_still_splits() {
+        // The left column is interrupted by a figure (one long blank run)
+        // while the right column keeps flowing; that is still prose.
+        let mut text = String::new();
+        let left = [
+            "Introduction to the topic here",
+            "we describe a careful method",
+            "that is applied to real data",
+            "and then evaluated at length.",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "Figure caption under the plot",
+            "and the column then resumes.",
+        ];
+        for (i, l) in left.iter().enumerate() {
+            text.push_str(&format!(
+                "{l:<38}right column line number {i:02} here
+"
+            ));
+        }
+        let out = reflow_columns(text.trim_end());
+        let lines: Vec<&str> = out.lines().map(str::trim_end).collect();
+        assert_eq!(lines[0], "Introduction to the topic here");
+        assert_eq!(lines[11], "and the column then resumes.");
+        assert_eq!(lines[12], "right column line number 00 here");
     }
 
     #[test]
