@@ -286,7 +286,13 @@ impl PdfEngine for PdfiumEngine {
                 let item_w = right - left;
                 let mut ti =
                     TextItem::new(str_content, left, y_top, item_w.max(0.0), item_h.max(0.0));
-                ti.font_size = Some(item_h.max(1.0));
+                // Prefer the real font size / name from the segment's first
+                // visible glyph: the bbox height depends on which glyphs the
+                // run contains (x-height vs. ascenders), which makes it a
+                // noisy signal for heading detection.
+                let (font_size, font_name) = segment_font(&segment);
+                ti.font_size = Some(font_size.unwrap_or(item_h).max(1.0));
+                ti.font_name = font_name;
                 items.push(ti);
             }
 
@@ -396,4 +402,42 @@ fn encode_image_object_to_png(
         .write_image(rgba.as_raw(), w, h, image::ExtendedColorType::Rgba8)
         .ok()?;
     Some(buf.into_inner())
+}
+
+/// Font size and name of the first non-whitespace glyph in a text segment.
+/// A font whose weight is >= 700 but whose name carries no weight hint gets
+/// a `,Bold` suffix (the conventional PDF style suffix) so downstream
+/// consumers can detect bold runs from the name alone.
+fn segment_font(
+    segment: &pdfium_render::prelude::PdfPageTextSegment<'_>,
+) -> (Option<f64>, Option<String>) {
+    use pdfium_render::prelude::PdfFontWeight;
+    let Ok(chars) = segment.chars() else {
+        return (None, None);
+    };
+    for ch in chars.iter() {
+        if ch.unicode_char().is_none_or(char::is_whitespace) {
+            continue;
+        }
+        let size = ch.scaled_font_size().value as f64;
+        let size = (size.is_finite() && size > 0.0).then_some(size);
+        let mut name = ch.font_name();
+        let heavy = matches!(
+            ch.font_weight(),
+            Some(
+                PdfFontWeight::Weight700Bold | PdfFontWeight::Weight800 | PdfFontWeight::Weight900
+            )
+        ) || matches!(ch.font_weight(), Some(PdfFontWeight::Custom(w)) if w >= 700);
+        let lower = name.to_ascii_lowercase();
+        if heavy
+            && !["bold", "black", "heavy", "semibold"]
+                .iter()
+                .any(|k| lower.contains(k))
+        {
+            name.push_str(",Bold");
+        }
+        let name = (!name.is_empty()).then_some(name);
+        return (size, name);
+    }
+    (None, None)
 }

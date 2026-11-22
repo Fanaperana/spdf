@@ -172,6 +172,7 @@ struct BatchArgs {
 enum CliFormat {
     Text,
     Json,
+    Markdown,
 }
 
 impl From<CliFormat> for OutputFormat {
@@ -179,6 +180,7 @@ impl From<CliFormat> for OutputFormat {
         match f {
             CliFormat::Text => OutputFormat::Text,
             CliFormat::Json => OutputFormat::Json,
+            CliFormat::Markdown => OutputFormat::Markdown,
         }
     }
 }
@@ -328,6 +330,15 @@ fn run_parse_streaming(
                 }
                 writer.write_all(page.text.as_bytes())?;
             }
+            OutputFormat::Markdown => {
+                // Streaming sees one page at a time, so typography stats
+                // are per page rather than document-wide.
+                if !first {
+                    writer.write_all(b"\n\n")?;
+                }
+                let style = spdf_output::DocStyle::from_pages([&page]);
+                writer.write_all(spdf_output::page_to_markdown(&page, &style).as_bytes())?;
+            }
             OutputFormat::Json => {
                 let line = serde_json::to_string(&spdf_output::page_to_json_value(&page))
                     .context("serializing page JSON")?;
@@ -338,7 +349,7 @@ fn run_parse_streaming(
         writer.flush()?;
         first = false;
     }
-    if matches!(format, OutputFormat::Text) && !first {
+    if matches!(format, OutputFormat::Text | OutputFormat::Markdown) && !first {
         writer.write_all(b"\n")?;
     }
     Ok(())
@@ -376,6 +387,7 @@ fn run_batch(args: BatchArgs, quiet: bool) -> Result<()> {
     let out_ext = match output_format {
         OutputFormat::Json => "json",
         OutputFormat::Text => "txt",
+        OutputFormat::Markdown => "md",
     };
 
     let mut files: Vec<PathBuf> = Vec::new();

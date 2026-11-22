@@ -2,6 +2,11 @@
 
 #![warn(clippy::all)]
 
+mod markdown;
+mod md_table;
+
+pub use markdown::{DocStyle, format_markdown, page_to_markdown};
+
 use spdf_types::{
     BoundingBox, JsonPage, JsonTextItem, ParseResult, ParseResultJson, ParsedPage, SpdfResult,
 };

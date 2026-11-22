@@ -9,7 +9,7 @@ use std::sync::Arc;
 use rayon::prelude::*;
 use spdf_convert::{ConversionResult, convert_path_to_pdf};
 use spdf_ocr::{HttpOcrEngine, OcrEngine, OcrOptions, OcrResult};
-use spdf_output::{format_text, to_json};
+use spdf_output::{format_markdown, format_text, to_json};
 use spdf_pdf::{ExtractOptions, PageData, PdfDocumentHandle, PdfEngine, PdfiumEngine};
 use spdf_processing::bbox::build_bounding_boxes;
 use spdf_processing::text_utils::clean_ocr_table_artifacts;
@@ -505,6 +505,7 @@ impl SpdfParser {
     pub fn format(&self, result: &ParseResult) -> String {
         match self.config.output_format {
             OutputFormat::Text => format_text(result),
+            OutputFormat::Markdown => format_markdown(result),
             OutputFormat::Json => {
                 let json = result.json.clone().unwrap_or_else(|| to_json(result));
                 serde_json::to_string_pretty(&json).unwrap_or_default()

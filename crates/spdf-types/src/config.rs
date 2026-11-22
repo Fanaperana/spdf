@@ -13,6 +13,9 @@ pub enum OutputFormat {
     Json,
     /// Plain text with spatial layout preserved.
     Text,
+    /// Markdown: the spatial text with headings (`#`) inferred from font
+    /// size and weight.
+    Markdown,
 }
 
 /// Grid projection debug knobs. Replaces the bespoke `gridDebugLogger` with a
