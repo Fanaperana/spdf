@@ -398,6 +398,47 @@ fn is_run_in(text: &str) -> bool {
     false
 }
 
+/// Whether a line opens in the middle of a sentence: its first word starts
+/// with a lowercase letter (`and the proliferation of ...`). Enumerators
+/// (`a.`, `iv)`) and camel-cased names (`iPhone`, `eBay`) are exempt.
+fn starts_mid_sentence(text: &str) -> bool {
+    let Some(first) = text.split_whitespace().next() else {
+        return false;
+    };
+    if is_enumerator(first) {
+        return false;
+    }
+    let mut cs = first.chars();
+    let starts_lower = cs.next().is_some_and(char::is_lowercase);
+    let camel = cs.next().is_some_and(char::is_uppercase);
+    starts_lower && !camel
+}
+
+/// Whether a line of body text stops mid-sentence: it ends in a lowercase
+/// word or a comma, so the next line continues the same sentence.
+fn ends_mid_sentence(text: &str) -> bool {
+    text.trim_end()
+        .chars()
+        .last()
+        .is_some_and(|c| c.is_lowercase() || c == ',')
+}
+
+/// Whether a line closes a sentence (`... and the United Kingdom.`),
+/// ignoring trailing closing quotes, brackets and footnote digits.
+fn ends_sentence(text: &str) -> bool {
+    text.trim_end()
+        .trim_end_matches(|c: char| c.is_ascii_digit() || "\"'”’)]".contains(c))
+        .ends_with(['.', '!', '?'])
+}
+
+/// A heading-styled line that is really the tail of the running paragraph:
+/// it starts in lowercase, or it finishes a sentence the previous body line
+/// left open. Emphasised words (a bold list of names, an italic title)
+/// wrapping onto their own line look exactly like a short heading.
+fn continues_paragraph(prev_body: Option<&str>, text: &str) -> bool {
+    starts_mid_sentence(text) || (prev_body.is_some_and(ends_mid_sentence) && ends_sentence(text))
+}
+
 fn plausible_heading(text: &str) -> bool {
     !is_caption(text) && !is_run_in(text) && sized_like_heading(text)
 }
@@ -464,6 +505,8 @@ pub fn page_to_markdown(page: &ParsedPage, style: &DocStyle) -> String {
     let mut open: Option<usize> = None;
     // Heading style of the previous line when it was rejected as a heading.
     let mut suppressed: Option<usize> = None;
+    // The body line directly above (no blank line in between), if any.
+    let mut prev_body: Option<&str> = None;
     let text = crate::page_text(page);
     let lines: Vec<&str> = text.lines().collect();
     let tables = page_tables(page, &lines);
@@ -473,6 +516,7 @@ pub fn page_to_markdown(page: &ParsedPage, style: &DocStyle) -> String {
         if let Some(t) = next_table.next_if(|t| t.first == idx) {
             open = None;
             suppressed = None;
+            prev_body = None;
             if out.last().is_some_and(|l| !l.is_empty()) {
                 out.push(String::new());
             }
@@ -487,12 +531,17 @@ pub fn page_to_markdown(page: &ParsedPage, style: &DocStyle) -> String {
         if line.is_empty() {
             open = None;
             suppressed = None;
+            prev_body = None;
             out.push(String::new());
             continue;
         }
         let text = collapse_ws(line);
         let styled = heading_level(&headings, line);
-        let mut level = styled.filter(|_| plausible_heading(&text));
+        let mut level = styled.filter(|lv| {
+            plausible_heading(&text)
+                // A wrapped heading may continue in lowercase.
+                && (open == Some(*lv) || !continues_paragraph(prev_body, &text))
+        });
         // The wrapped remainder of a rejected caption or run-in heading
         // shares its style; keep it with the body too.
         if level.is_some() && level == suppressed {
@@ -508,12 +557,15 @@ pub fn page_to_markdown(page: &ParsedPage, style: &DocStyle) -> String {
                 let last = out.last_mut().expect("open heading has a line");
                 last.push(' ');
                 last.push_str(&text);
+                prev_body = None;
             }
             Some(lv) => {
                 push_heading(&mut out, lv, &text);
                 open = Some(lv);
+                prev_body = None;
             }
             None => {
+                prev_body = Some(line);
                 if open.take().is_some() {
                     out.push(String::new());
                 }
@@ -820,5 +872,76 @@ across all sectors (%)
             "{md}"
         );
         assert!(md.contains("# Results"), "{md}");
+    }
+
+    #[test]
+    fn bold_sentence_tail_is_not_a_heading() {
+        // A bold list of names wraps so its last entry fills a line alone.
+        let mut items = body_items(8, 100.0);
+        items.push(item("Sweden, and the", 50.0, 40.0, 10.0, "Times"));
+        items.push(item("United Kingdom.", 50.0, 52.0, 10.0, "Times-Bold"));
+        items.push(item("Results", 50.0, 70.0, 10.0, "Times-Bold"));
+        let p = page(
+            "Norway, Portugal, Sweden, and the\nUnited Kingdom.\n\nResults\nbody text line with words",
+            items,
+        );
+        let style = DocStyle::from_pages([&p]);
+        let md = page_to_markdown(&p, &style);
+        assert!(md.contains("and the\nUnited Kingdom.\n"), "{md}");
+        // A heading after a finished sentence is still recognised.
+        assert!(md.contains("\n# Results\n"), "{md}");
+    }
+
+    #[test]
+    fn lowercase_line_is_not_a_heading() {
+        let mut items = body_items(8, 100.0);
+        items.push(item(
+            "and the proliferation of propaganda",
+            50.0,
+            40.0,
+            14.0,
+            "Times",
+        ));
+        let p = page(
+            "body text line with words\nand the proliferation of propaganda\nbody text line with words",
+            items,
+        );
+        let style = DocStyle::from_pages([&p]);
+        let md = page_to_markdown(&p, &style);
+        assert!(!md.contains('#'), "{md}");
+    }
+
+    #[test]
+    fn wrapped_heading_may_continue_in_lowercase() {
+        let mut items = vec![
+            item("Determining CEC by replacing", 50.0, 20.0, 16.0, "Times"),
+            item("adsorbed cations", 50.0, 40.0, 16.0, "Times"),
+        ];
+        items.extend(body_items(8, 80.0));
+        let p = page(
+            "Determining CEC by replacing\nadsorbed cations\nbody text line with words",
+            items,
+        );
+        let style = DocStyle::from_pages([&p]);
+        let md = page_to_markdown(&p, &style);
+        assert!(
+            md.starts_with("# Determining CEC by replacing adsorbed cations\n"),
+            "{md}"
+        );
+    }
+
+    #[test]
+    fn mid_sentence_predicates() {
+        assert!(starts_mid_sentence("and Wood Chips"));
+        assert!(!starts_mid_sentence("iPhone Sales"));
+        assert!(!starts_mid_sentence("b. Plastic"));
+        assert!(!starts_mid_sentence("Results"));
+        assert!(ends_mid_sentence("Sweden, and the"));
+        assert!(ends_mid_sentence("Belgium, France,"));
+        assert!(!ends_mid_sentence("of interest."));
+        assert!(!ends_mid_sentence("CHAPTER 1"));
+        assert!(ends_sentence("violence towards women.”"));
+        assert!(ends_sentence("a Challenger).2"));
+        assert!(!ends_sentence("Business Models"));
     }
 }
