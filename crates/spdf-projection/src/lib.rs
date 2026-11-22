@@ -71,6 +71,7 @@ pub fn project_page(page: PageInput, debug: bool, preserve_small: bool) -> Parse
             text_items,
             bounding_boxes: None,
             tables: None,
+            rulings: Vec::new(),
         };
     }
 
@@ -157,6 +158,7 @@ pub fn project_page(page: PageInput, debug: bool, preserve_small: bool) -> Parse
         text_items,
         bounding_boxes: None,
         tables: None,
+        rulings: Vec::new(),
     }
 }
 

@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use pdfium_render::prelude::{PdfPageObjectsCommon, PdfRenderConfig, Pdfium};
-use spdf_types::{Image, SpdfError, SpdfResult, TextItem};
+use spdf_types::{Image, Ruling, SpdfError, SpdfResult, TextItem};
 use tracing::{debug, warn};
 
 use crate::engine::{ExtractOptions, PageData, PdfDocumentHandle, PdfEngine};
@@ -345,12 +345,19 @@ impl PdfEngine for PdfiumEngine {
                 Vec::new()
             };
 
+            let rulings = if options.extract_rulings {
+                extract_rulings(&page, height)
+            } else {
+                Vec::new()
+            };
+
             Ok(PageData {
                 page_num,
                 width,
                 height,
                 text_items: items,
                 images,
+                rulings,
             })
         })
     }
@@ -382,6 +389,118 @@ impl PdfEngine for PdfiumEngine {
                 .map_err(|e| SpdfError::Pdf(format!("encode png: {e}")))?;
             Ok(buf)
         })
+    }
+}
+
+/// Upper bound on rules collected per page: vector-art pages can hold
+/// tens of thousands of strokes that are never table borders.
+const MAX_RULINGS: usize = 20_000;
+/// Thickest filled shape still read as a drawn rule, in points.
+const MAX_RULE_THICKNESS: f64 = 3.0;
+
+/// Collect the axis-aligned straight edges of the page's visible vector
+/// paths: stroked lines and shapes, and thin filled rectangles (a common
+/// way to draw table rules).
+/// Coordinates are flipped to a top-left origin.
+fn extract_rulings(page: &pdfium_render::prelude::PdfPage<'_>, page_height: f64) -> Vec<Ruling> {
+    use pdfium_render::prelude::{
+        PdfPageObjectCommon, PdfPathFillMode, PdfPathSegmentType, PdfPathSegments,
+    };
+    let mut out = Vec::new();
+    for object in page.objects().iter() {
+        if out.len() >= MAX_RULINGS {
+            break;
+        }
+        let Some(path) = object.as_path_object() else {
+            continue;
+        };
+        let stroked = path.is_stroked().unwrap_or(false);
+        let filled = !matches!(path.fill_mode(), Ok(PdfPathFillMode::None) | Err(_));
+        if !stroked && !filled {
+            continue;
+        }
+        // White fills (page backgrounds, knock-outs) draw nothing visible.
+        if !stroked {
+            if let Ok(c) = object.fill_color() {
+                if c.alpha() == 0 || (c.red() >= 250 && c.green() >= 250 && c.blue() >= 250) {
+                    continue;
+                }
+            }
+        }
+        let Ok(matrix) = path.matrix() else {
+            continue;
+        };
+        let segments = path.segments().transform(matrix);
+        let first = out.len();
+        let (mut lo_x, mut lo_y, mut hi_x, mut hi_y) = (
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        );
+        let mut start: Option<(f64, f64)> = None;
+        let mut cur: Option<(f64, f64)> = None;
+        for seg in segments.iter() {
+            let (x, y) = seg.point();
+            let p = (x.value as f64, page_height - y.value as f64);
+            lo_x = lo_x.min(p.0);
+            hi_x = hi_x.max(p.0);
+            lo_y = lo_y.min(p.1);
+            hi_y = hi_y.max(p.1);
+            match seg.segment_type() {
+                PdfPathSegmentType::MoveTo => {
+                    start = Some(p);
+                    cur = Some(p);
+                    continue;
+                }
+                PdfPathSegmentType::LineTo => {
+                    if let Some(c) = cur {
+                        push_ruling(&mut out, c, p);
+                    }
+                }
+                _ => {}
+            }
+            cur = Some(p);
+            if seg.is_close() {
+                if let Some(s0) = start {
+                    push_ruling(&mut out, p, s0);
+                    cur = Some(s0);
+                }
+            }
+        }
+        // A fill-only path draws a rule only when it is thin; the edges of
+        // large shaded areas (cell backgrounds, panels) are not borders.
+        if !stroked && (hi_x - lo_x).min(hi_y - lo_y) > MAX_RULE_THICKNESS {
+            out.truncate(first);
+        }
+    }
+    out
+}
+
+/// Record the edge `a -> b` when it is (nearly) horizontal or vertical.
+fn push_ruling(out: &mut Vec<Ruling>, a: (f64, f64), b: (f64, f64)) {
+    const AXIS_TOL: f64 = 0.5;
+    const MIN_LEN: f64 = 1.0;
+    let (dx, dy) = ((b.0 - a.0).abs(), (b.1 - a.1).abs());
+    if !(a.0.is_finite() && a.1.is_finite() && b.0.is_finite() && b.1.is_finite()) {
+        return;
+    }
+    if dy <= AXIS_TOL && dx >= MIN_LEN {
+        let y = (a.1 + b.1) / 2.0;
+        out.push(Ruling {
+            x1: a.0.min(b.0),
+            y1: y,
+            x2: a.0.max(b.0),
+            y2: y,
+        });
+    } else if dx <= AXIS_TOL && dy >= MIN_LEN {
+        let x = (a.0 + b.0) / 2.0;
+        out.push(Ruling {
+            x1: x,
+            y1: a.1.min(b.1),
+            x2: x,
+            y2: a.1.max(b.1),
+        });
     }
 }
 

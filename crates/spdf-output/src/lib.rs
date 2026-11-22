@@ -5,6 +5,7 @@
 mod columns;
 mod markdown;
 mod md_table;
+mod ruled_table;
 
 pub use columns::reflow_columns;
 pub use markdown::{DocStyle, format_markdown, page_to_markdown};
@@ -100,6 +101,7 @@ mod tests {
                     y2: 32.0,
                 }]),
                 tables: None,
+                rulings: Vec::new(),
             }],
             text: "hello world".into(),
             json: None,

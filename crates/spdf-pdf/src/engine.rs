@@ -1,12 +1,15 @@
 //! Engine trait and shared data types.
 
-use spdf_types::{Image, SpdfResult, TextItem};
+use spdf_types::{Image, Ruling, SpdfResult, TextItem};
 
 /// Options controlling page extraction.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ExtractOptions {
     /// Whether to extract embedded image bounds (needed for selective OCR).
     pub extract_images: bool,
+    /// Whether to collect straight line rules (table borders) from vector
+    /// graphics. Only layout-aware output (markdown tables) needs them.
+    pub extract_rulings: bool,
 }
 
 /// Minimal page data required by the projection/OCR pipeline.
@@ -17,6 +20,8 @@ pub struct PageData {
     pub height: f64,
     pub text_items: Vec<TextItem>,
     pub images: Vec<Image>,
+    /// Axis-aligned rules drawn on the page (empty unless requested).
+    pub rulings: Vec<Ruling>,
 }
 
 /// An opaque handle to a loaded PDF document.

@@ -172,6 +172,29 @@ pub struct ParsedPage {
     /// [`crate::ParseConfig::detect_tables`] is enabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tables: Option<Vec<Table>>,
+    /// Straight horizontal / vertical rules drawn on the page (table
+    /// borders, separators). Only collected for layout-aware output
+    /// formats; not part of the serialised schema.
+    #[serde(skip, default)]
+    pub rulings: Vec<Ruling>,
+}
+
+/// A straight axis-aligned line segment drawn on a page, in PDF points
+/// with a top-left origin. Horizontal rules have `y1 == y2`, vertical
+/// rules `x1 == x2`; coordinates are ordered so `x1 <= x2`, `y1 <= y2`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Ruling {
+    pub x1: f64,
+    pub y1: f64,
+    pub x2: f64,
+    pub y2: f64,
+}
+
+impl Ruling {
+    /// True when the segment runs left-to-right.
+    pub fn is_horizontal(&self) -> bool {
+        (self.y2 - self.y1).abs() <= (self.x2 - self.x1).abs()
+    }
 }
 
 /// A structured table detected on a page. Rows contain string cells in

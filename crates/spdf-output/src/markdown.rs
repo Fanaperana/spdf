@@ -196,6 +196,45 @@ fn plausible_heading(text: &str) -> bool {
         && !text.ends_with(',')
 }
 
+/// Tables on a page, in line order and non-overlapping: bordered tables
+/// recovered from the page's rules first, then text-aligned tables found
+/// in the remaining lines.
+fn page_tables(page: &ParsedPage, lines: &[&str]) -> Vec<crate::md_table::MdTable> {
+    let mut ruled = Vec::new();
+    if !page.rulings.is_empty() {
+        let mut from = 0;
+        for t in crate::ruled_table::detect(&page.rulings, &page.text_items) {
+            if let Some((first, last)) = crate::ruled_table::locate(lines, &t.words, from) {
+                ruled.push(crate::md_table::MdTable {
+                    first,
+                    last,
+                    rows: t.rows,
+                });
+                from = last + 1;
+            }
+        }
+    }
+    if ruled.is_empty() {
+        return crate::md_table::find_tables(lines);
+    }
+    // Hide the ruled tables' lines from the alignment-based detector.
+    let masked: Vec<&str> = lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            if ruled.iter().any(|t| (t.first..=t.last).contains(&i)) {
+                ""
+            } else {
+                *l
+            }
+        })
+        .collect();
+    let mut all = ruled;
+    all.extend(crate::md_table::find_tables(&masked));
+    all.sort_by_key(|t| t.first);
+    all
+}
+
 /// Render a single page as Markdown using document-level `style`.
 pub fn page_to_markdown(page: &ParsedPage, style: &DocStyle) -> String {
     let headings = heading_lines(page, style);
@@ -204,7 +243,7 @@ pub fn page_to_markdown(page: &ParsedPage, style: &DocStyle) -> String {
     let mut open: Option<usize> = None;
     let text = crate::page_text(page);
     let lines: Vec<&str> = text.lines().collect();
-    let tables = crate::md_table::find_tables(&lines);
+    let tables = page_tables(page, &lines);
     let mut next_table = tables.iter().peekable();
     let mut idx = 0;
     while idx < lines.len() {
@@ -280,6 +319,7 @@ mod tests {
             text_items: items,
             bounding_boxes: None,
             tables: None,
+            rulings: Vec::new(),
         }
     }
 

@@ -14,5 +14,6 @@ pub use error::{SpdfError, SpdfResult};
 pub use input::ParseInput;
 pub use text::{
     BoundingBox, Coordinates, Image, JsonPage, JsonTextItem, MarkupData, OcrData, ParseResult,
-    ParseResultJson, ParsedPage, ProjectionTextBox, ScreenshotResult, Snap, Table, TextItem,
+    ParseResultJson, ParsedPage, ProjectionTextBox, Ruling, ScreenshotResult, Snap, Table,
+    TextItem,
 };

@@ -150,6 +150,7 @@ impl SpdfParser {
 
         let opts = ExtractOptions {
             extract_images: cfg.ocr_enabled,
+            extract_rulings: matches!(cfg.output_format, OutputFormat::Markdown),
         };
 
         let pdf_engine = Arc::clone(&self.pdf_engine);
@@ -197,6 +198,11 @@ impl SpdfParser {
         }
         check_deadline("cid-garbage-filter")?;
 
+        let mut rulings: Vec<(u32, Vec<spdf_types::Ruling>)> = page_datas
+            .iter_mut()
+            .filter(|p| !p.rulings.is_empty())
+            .map(|p| (p.page_num, std::mem::take(&mut p.rulings)))
+            .collect();
         let pages: Vec<PageInput> = page_datas
             .into_iter()
             .map(|p| PageInput {
@@ -208,6 +214,11 @@ impl SpdfParser {
             .collect();
 
         let mut processed: Vec<ParsedPage> = project_pages_to_grid(pages, &cfg);
+        for page in processed.iter_mut() {
+            if let Some(i) = rulings.iter().position(|(n, _)| *n == page.page_num) {
+                page.rulings = rulings.swap_remove(i).1;
+            }
+        }
 
         // Optionally strip running headers / footers that repeat across
         // pages. Opt-in: they are genuine page content, but dropping them
@@ -427,13 +438,15 @@ impl SpdfParser {
         let page_numbers = select_pages(total, cfg.target_pages.as_deref())?;
         let opts = ExtractOptions {
             extract_images: cfg.ocr_enabled,
+            extract_rulings: matches!(cfg.output_format, OutputFormat::Markdown),
         };
         let engine = Arc::clone(&self.pdf_engine);
         let precise_bbox = cfg.precise_bounding_box;
         let detect_tables = cfg.detect_tables;
         let debug_on = cfg.debug.as_ref().is_some_and(|d| d.enabled);
         let iter = page_numbers.into_iter().map(move |page_num| {
-            let pd = engine.extract_page(&doc, page_num, opts)?;
+            let mut pd = engine.extract_page(&doc, page_num, opts)?;
+            let page_rulings = std::mem::take(&mut pd.rulings);
             let pages = spdf_projection::project_pages_to_grid(
                 vec![spdf_projection::PageInput {
                     page_num: pd.page_num,
@@ -444,6 +457,7 @@ impl SpdfParser {
                 &cfg,
             );
             let mut page = pages.into_iter().next().unwrap();
+            page.rulings = page_rulings;
             if precise_bbox {
                 page.bounding_boxes = Some(spdf_processing::bbox::build_bounding_boxes(
                     &page.text_items,
@@ -557,6 +571,7 @@ fn plain_text_result(content: String) -> ParseResult {
         text_items: vec![TextItem::new(&content, 0.0, 0.0, 0.0, 0.0)],
         bounding_boxes: None,
         tables: None,
+        rulings: Vec::new(),
     };
     let mut result = ParseResult {
         pages: vec![page],
@@ -1143,6 +1158,7 @@ mod tests {
             text_items: items,
             bounding_boxes: None,
             tables: None,
+            rulings: Vec::new(),
         }
     }
 
