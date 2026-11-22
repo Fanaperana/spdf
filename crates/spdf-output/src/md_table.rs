@@ -320,6 +320,30 @@ fn grow_block(segs: &[Vec<Seg>], start: usize) -> (Option<MdTable>, usize) {
     if multi < MIN_MULTI_LINES || cols.0.len() < 2 {
         return (None, next);
     }
+    // Rows of a table line up: at least two columns hold cells of two or
+    // more multi-cell lines, or (a header centred over its cells need not
+    // overlap them) two multi-cell lines follow each other directly. Lines
+    // that only share their first column and are set apart by other text
+    // (a page number and running header above a numbered heading) step
+    // across the page instead.
+    let multi_lines: Vec<usize> = members
+        .iter()
+        .copied()
+        .filter(|&m| segs[m].len() >= 2)
+        .collect();
+    let shared_cols = (0..cols.0.len())
+        .filter(|&c| {
+            multi_lines
+                .iter()
+                .filter(|&&m| segs[m].iter().any(|s| cols.hits((s.start, s.end)) == [c]))
+                .count()
+                >= 2
+        })
+        .count();
+    let adjacent = multi_lines.windows(2).any(|w| w[1] == w[0] + 1);
+    if shared_cols < 2 && !adjacent {
+        return (None, next);
+    }
 
     let ncols = cols.0.len();
     let mut rows: Vec<Vec<String>> = Vec::new();
@@ -579,6 +603,17 @@ mod tests {
     #[test]
     fn single_aligned_line_is_not_a_table() {
         let lines = ["Name     Value", "plain prose follows here"];
+        assert!(find_tables(&lines).is_empty());
+    }
+
+    #[test]
+    fn lines_sharing_only_their_first_column_are_not_a_table() {
+        let lines = [
+            "150                                    Running Header",
+            "Figure 2 A caption below the picture.",
+            "",
+            "4     Section  Title of the Chapter",
+        ];
         assert!(find_tables(&lines).is_empty());
     }
 

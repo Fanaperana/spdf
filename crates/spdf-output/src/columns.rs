@@ -194,8 +194,12 @@ fn too_many_holes(side: &[Line], other: &[Line]) -> bool {
     holes as f64 > nonblank as f64 * MAX_HOLE_SHARE
 }
 
+/// A block split at a gutter: the left prose column, the remaining right
+/// side, and the gutter's grid cells `[start, end)`.
+type Split = (Vec<Line>, Vec<Line>, (usize, usize));
+
 /// Split `lines` into a left prose column and the remaining right side.
-fn split_block(lines: &[Line], depth: usize) -> Option<(Vec<Line>, Vec<Line>)> {
+fn split_block(lines: &[Line], depth: usize) -> Option<Split> {
     if depth >= MAX_DEPTH {
         return None;
     }
@@ -223,7 +227,7 @@ fn split_block(lines: &[Line], depth: usize) -> Option<(Vec<Line>, Vec<Line>)> {
             continue;
         }
         if is_prose(&right) || split_block(&right, depth + 1).is_some() {
-            return Some((left, right));
+            return Some((left, right, (g0, g1)));
         }
     }
     None
@@ -241,27 +245,50 @@ fn trim_blank_edges(mut v: Vec<Line>) -> Vec<Line> {
 /// Emit `lines` column by column, appending rendered lines to `out`.
 fn emit_columns(lines: &[Line], depth: usize, out: &mut Vec<String>) {
     match split_block(lines, depth) {
-        Some((left, right)) => {
-            emit_columns(&trim_blank_edges(left), depth + 1, out);
-            let right = trim_blank_edges(right);
-            let indent = right
-                .iter()
-                .filter(|l| !is_blank(l))
-                .map(|l| l.iter().take_while(|c| c.is_whitespace()).count())
-                .min()
-                .unwrap_or(0);
-            let right: Vec<Line> = right
-                .iter()
-                .map(|l| slice(l, indent.min(l.len()), usize::MAX))
-                .collect();
-            emit_columns(&right, depth + 1, out);
-        }
+        Some((left, right, _)) => emit_split(left, right, depth, out),
         None => out.extend(
             lines
                 .iter()
                 .map(|l| l.iter().collect::<String>().trim_end().to_string()),
         ),
     }
+}
+
+/// Emit a split block: the left column, then the de-indented right side.
+fn emit_split(left: Vec<Line>, right: Vec<Line>, depth: usize, out: &mut Vec<String>) {
+    emit_columns(&trim_blank_edges(left), depth + 1, out);
+    let right = trim_blank_edges(right);
+    let indent = right
+        .iter()
+        .filter(|l| !is_blank(l))
+        .map(|l| indent_of(l))
+        .min()
+        .unwrap_or(0);
+    let right: Vec<Line> = right
+        .iter()
+        .map(|l| slice(l, indent.min(l.len()), usize::MAX))
+        .collect();
+    emit_columns(&right, depth + 1, out);
+}
+
+fn indent_of(l: &[char]) -> usize {
+    l.iter().take_while(|c| c.is_whitespace()).count()
+}
+
+/// Text segments of `l` as grid cells `[start, end)`: runs of characters
+/// separated by gaps at least `MIN_GUTTER` wide.
+fn segments(l: &[char]) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    for (c, ch) in l.iter().enumerate() {
+        if ch.is_whitespace() {
+            continue;
+        }
+        match out.last_mut() {
+            Some(seg) if c - seg.1 < MIN_GUTTER => seg.1 = c + 1,
+            _ => out.push((c, c + 1)),
+        }
+    }
+    out
 }
 
 /// Longest run of lines from `start` that keeps a common interior gutter
@@ -316,17 +343,113 @@ fn find_region(lines: &[Line], start: usize) -> Option<usize> {
         })
 }
 
+/// Lines just above the column region `[start, end)` that belong to its
+/// columns: returns the widened start and the gutter `[a, b)` that splits
+/// the widened block, or `None` when nothing is added.
+///
+/// Columns rarely start on the same line: a figure atop the left column
+/// leaves the right one running alone above the first line that pairs the
+/// two, and lines of different pitch leave holes that keep such a top
+/// from validating as a region of its own. Upwards from the region, lines
+/// are taken while each leaves a gutter open (it may narrow it). Text
+/// right of the gutter must start at the right column's edge on lines that
+/// pair both sides and on the topmost line taken (right-only lines between
+/// may be indented paragraph starts or centred caption lines), so a
+/// right-aligned date or running header above the columns is not read as
+/// part of them. Taken lines must not merge columns that the region's
+/// right side splits into.
+fn lead_in(
+    lines: &[Line],
+    floor: usize,
+    start: usize,
+    end: usize,
+) -> Option<(usize, (usize, usize))> {
+    let (_, right, (g0, g1)) = split_block(&lines[start..end], 0)?;
+    let edge = right
+        .iter()
+        .filter(|l| !is_blank(l))
+        .map(|l| indent_of(l))
+        .min()
+        .unwrap_or(0)
+        + g1;
+    let (mut a, mut b) = (g0, g1);
+    let mut gut = (a, b);
+    let mut k = start;
+    let mut taken = start;
+    while k > floor {
+        let l = &lines[k - 1];
+        if !is_blank(l) {
+            let (mut na, mut nb) = (a, b);
+            let mut left = false;
+            let mut rgt: Option<usize> = None;
+            let mut ok = true;
+            for (s0, s1) in segments(l) {
+                if s1 <= na {
+                    left = true;
+                } else if s0 >= nb {
+                    rgt = rgt.or(Some(s0));
+                } else if s0 < na && s1 <= nb {
+                    left = true;
+                    na = s1;
+                } else if s0 >= na && s1 > nb {
+                    rgt = rgt.or(Some(s0));
+                    nb = s0;
+                } else {
+                    ok = false;
+                }
+            }
+            let at = rgt.is_some_and(|r| r.abs_diff(edge) <= 1);
+            if !ok || nb < na + MIN_GUTTER || (left && rgt.is_some() && !at) {
+                break;
+            }
+            (a, b) = (na, nb);
+            if left || at {
+                taken = k - 1;
+                gut = (a, b);
+            }
+        }
+        k -= 1;
+    }
+    if taken == start {
+        return None;
+    }
+    // A right side that held further columns must still split once the
+    // taken lines are added; else the lines are left out.
+    if split_block(&right, 1).is_some() {
+        let widened: Vec<Line> = lines[taken..end]
+            .iter()
+            .map(|l| slice(l, gut.1, usize::MAX))
+            .collect();
+        split_block(&widened, 1)?;
+    }
+    Some((taken, gut))
+}
+
 /// Rewrite side-by-side columns in `text` into column-major reading order.
 /// Text without a detectable multi-column prose region is returned as is.
 pub fn reflow_columns(text: &str) -> String {
     let lines: Vec<Line> = text.lines().map(|l| l.chars().collect()).collect();
     let mut out: Vec<String> = Vec::with_capacity(lines.len());
     let mut i = 0;
+    // Lines before `floor` were consumed by an earlier region.
+    let mut floor = 0;
     let mut changed = false;
     while i < lines.len() {
         if !is_blank(&lines[i]) {
             if let Some(end) = find_region(&lines, i) {
-                emit_columns(&lines[i..end], 0, &mut out);
+                // Lines above the region that belong to one of its columns
+                // were emitted as is; take them back into the region.
+                match lead_in(&lines, floor, i, end) {
+                    Some((start, (a, b))) => {
+                        out.truncate(out.len() - (i - start));
+                        let block = &lines[start..end];
+                        let left = block.iter().map(|l| slice(l, 0, a)).collect();
+                        let right = block.iter().map(|l| slice(l, b, usize::MAX)).collect();
+                        emit_split(left, right, 0, &mut out);
+                    }
+                    None => emit_columns(&lines[i..end], 0, &mut out),
+                }
+                floor = end;
                 changed = true;
                 i = end;
                 continue;
@@ -557,5 +680,87 @@ sustainability
         }
         let text = text.trim_end().to_string();
         assert_eq!(reflow_columns(&text), text);
+    }
+
+    /// A right column that starts above the left one (a figure tops the
+    /// left column), joined by a paired line, then paired lines of
+    /// different pitch that leave holes on the left.
+    fn staggered_columns(top_right: &[&str]) -> String {
+        let pad = " ".repeat(40);
+        let mut text = String::new();
+        for r in top_right {
+            text.push_str(&format!(
+                "{pad}{r}
+"
+            ));
+        }
+        let rows: [(&str, &str); 10] = [
+            (
+                "Figure 1 A caption under the image.",
+                "the right column runs on to here",
+            ),
+            ("", "and keeps going in a smaller size"),
+            (
+                "A Heading For The Left Column",
+                "with notes set at a tighter pitch",
+            ),
+            ("", "so lines do not meet the left ones"),
+            (
+                "Body text of the left column goes",
+                "and the notes carry on below that",
+            ),
+            (
+                "on for several lines of running",
+                "while the left column runs beside",
+            ),
+            (
+                "prose that wraps from one line to",
+                "these notes until both of them end",
+            ),
+            ("", "near the bottom edge of the page."),
+            (
+                "the next one until the column is",
+                "One more note line follows here.",
+            ),
+            (
+                "done at the bottom of the page.",
+                "And the last note line ends it.",
+            ),
+        ];
+        for (l, r) in rows {
+            text.push_str(&format!(
+                "{l:<40}{r}
+"
+            ));
+        }
+        text.trim_end().to_string()
+    }
+
+    #[test]
+    fn right_column_starting_above_the_left_one_is_read_second() {
+        let top = [
+            "Right column prose starts up here at",
+            "the top of the page above a picture",
+            "that fills the top of the left column",
+            "and it carries on for a few lines as",
+        ];
+        let out = reflow_columns(&staggered_columns(&top));
+        let lines: Vec<&str> = out.lines().map(str::trim_end).collect();
+        assert_eq!(lines[0], "Figure 1 A caption under the image.");
+        let right = lines
+            .iter()
+            .position(|l| *l == "Right column prose starts up here at")
+            .unwrap();
+        assert!(lines[..right].contains(&"done at the bottom of the page."));
+        assert_eq!(lines[right + 4], "the right column runs on to here");
+        assert_eq!(lines.last(), Some(&"And the last note line ends it."));
+    }
+
+    #[test]
+    fn right_aligned_line_above_columns_stays_on_top() {
+        let top = ["", "", "                         12 March 2024"];
+        let out = reflow_columns(&staggered_columns(&top));
+        let lines: Vec<&str> = out.lines().map(str::trim).collect();
+        assert_eq!(lines.iter().find(|l| !l.is_empty()), Some(&"12 March 2024"));
     }
 }
