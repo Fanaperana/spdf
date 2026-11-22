@@ -281,7 +281,7 @@ fn heading_level(headings: &HashMap<String, usize>, line: &str) -> Option<usize>
         return Some(*lv);
     }
     let trimmed = line.trim_end();
-    let is_marker = |c: char| c.is_ascii_digit() || "*†‡§".contains(c);
+    let is_marker = |c: char| c.is_ascii_digit() || "*∗†‡§".contains(c);
     let marker_len: usize = trimmed
         .chars()
         .rev()
@@ -537,8 +537,20 @@ pub fn page_to_markdown(page: &ParsedPage, style: &DocStyle) -> String {
         }
         let text = collapse_ws(line);
         let styled = heading_level(&headings, line);
+        // A long heading may wrap after a comma; a line ending in one is
+        // only a heading when the next line continues in the same style.
+        let wraps_on = styled.is_some()
+            && text.ends_with(',')
+            && lines
+                .get(idx)
+                .is_some_and(|next| heading_level(&headings, next) == styled);
+        let candidate = if wraps_on {
+            text.trim_end_matches(',')
+        } else {
+            text.as_str()
+        };
         let mut level = styled.filter(|lv| {
-            plausible_heading(&text)
+            plausible_heading(candidate)
                 // A wrapped heading may continue in lowercase.
                 && (open == Some(*lv) || !continues_paragraph(prev_body, &text))
         });
@@ -659,6 +671,46 @@ mod tests {
         );
         let md = page_to_markdown(&p, &DocStyle::from_pages([&p]));
         assert!(md.starts_with("# A Rather Long Document Title\n"), "{md}");
+    }
+
+    #[test]
+    fn heading_wrapped_after_comma_is_merged() {
+        let mut items = vec![
+            item("We offer three packs for data,", 50.0, 20.0, 18.0, "Times"),
+            item("making a real impact", 50.0, 42.0, 18.0, "Times"),
+        ];
+        items.extend(body_items(6, 80.0));
+        let p = page(
+            "We offer three packs for data,\nmaking a real impact\nbody text line with words",
+            items,
+        );
+        let md = page_to_markdown(&p, &DocStyle::from_pages([&p]));
+        assert!(
+            md.starts_with("# We offer three packs for data, making a real impact\n"),
+            "{md}"
+        );
+    }
+
+    #[test]
+    fn comma_line_without_styled_continuation_is_body() {
+        let mut items = vec![item("Alpha, Beta, Gamma,", 50.0, 20.0, 18.0, "Times")];
+        items.extend(body_items(6, 50.0));
+        let p = page(
+            "Alpha, Beta, Gamma,\nbody text line with words\nbody text line with words",
+            items,
+        );
+        let md = page_to_markdown(&p, &DocStyle::from_pages([&p]));
+        assert!(md.starts_with("Alpha, Beta, Gamma,\n"), "{md}");
+    }
+
+    #[test]
+    fn asterisk_operator_footnote_marker_keeps_heading() {
+        let mut h = HashMap::new();
+        h.insert(strip_ws("3.7.3 Formulae of higher accuracy"), 1);
+        assert_eq!(
+            heading_level(&h, "3.7.3 Formulae of higher accuracy \u{2217}"),
+            Some(1)
+        );
     }
 
     #[test]
