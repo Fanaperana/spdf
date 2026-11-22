@@ -7,6 +7,8 @@
 mod engine;
 #[cfg(feature = "pdfium")]
 mod pdfium_engine;
+#[cfg_attr(not(feature = "pdfium"), allow(dead_code))]
+mod rtl;
 
 pub use engine::{ExtractOptions, PageData, PdfDocumentHandle, PdfEngine};
 

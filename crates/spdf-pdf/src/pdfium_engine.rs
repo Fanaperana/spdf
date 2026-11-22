@@ -296,6 +296,23 @@ impl PdfEngine for PdfiumEngine {
                 items.push(ti);
             }
 
+            // Rectangle-based segments duplicate overlapping glyphs and keep
+            // RTL scripts in visual order; rebuild such pages from glyphs.
+            if items.iter().any(|it| crate::rtl::has_rtl(&it.str)) {
+                let runs = crate::rtl::build_runs(page_glyphs(&text_page, height));
+                if !runs.is_empty() {
+                    items = runs
+                        .into_iter()
+                        .map(|r| {
+                            let mut ti = TextItem::new(r.text, r.x, r.y, r.width, r.height);
+                            ti.font_size = Some(r.font_size.max(1.0));
+                            ti.font_name = r.font_name;
+                            ti
+                        })
+                        .collect();
+                }
+            }
+
             let images = if options.extract_images {
                 extract_images(&page, height)
             } else {
@@ -402,6 +419,53 @@ fn encode_image_object_to_png(
         .write_image(rgba.as_raw(), w, h, image::ExtendedColorType::Rgba8)
         .ok()?;
     Some(buf.into_inner())
+}
+
+/// All non-whitespace, non-generated glyphs of a page in content order,
+/// converted to top-left coordinates.
+fn page_glyphs(
+    text_page: &pdfium_render::prelude::PdfPageText<'_>,
+    page_height: f64,
+) -> Vec<crate::rtl::Glyph> {
+    let mut out = Vec::new();
+    for ch in text_page.chars().iter() {
+        if ch.is_generated().unwrap_or(false) {
+            continue;
+        }
+        let Some(text) = ch.unicode_string() else {
+            continue;
+        };
+        if text.is_empty() || text.chars().all(|c| c.is_whitespace() || c.is_control()) {
+            continue;
+        }
+        let Ok(rect) = ch.loose_bounds().or_else(|_| ch.tight_bounds()) else {
+            continue;
+        };
+        let size = ch.scaled_font_size().value as f64;
+        let top = rect.top().value as f64;
+        let bottom = rect.bottom().value as f64;
+        let size = if size.is_finite() && size > 0.0 {
+            size
+        } else {
+            (top - bottom).max(1.0)
+        };
+        let baseline = ch
+            .origin_y()
+            .map(|y| page_height - y.value as f64)
+            .unwrap_or(page_height - bottom);
+        let name = ch.font_name();
+        out.push(crate::rtl::Glyph {
+            text,
+            left: rect.left().value as f64,
+            right: rect.right().value as f64,
+            top: page_height - top,
+            bottom: page_height - bottom,
+            baseline,
+            font_size: size,
+            font_name: (!name.is_empty()).then_some(name),
+        });
+    }
+    out
 }
 
 /// Font size and name of the first non-whitespace glyph in a text segment.
