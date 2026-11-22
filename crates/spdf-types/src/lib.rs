@@ -1,6 +1,6 @@
 //! Public schema and error types for the spdf workspace.
 //!
-//! Mirrors [`liteparse/src/core/types.ts`] so JSON output stays schema-compatible.
+//! Mirrors `liteparse/src/core/types.ts` so JSON output stays schema-compatible.
 
 #![warn(clippy::all, missing_debug_implementations)]
 

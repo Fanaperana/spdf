@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Output format.
 ///
-/// Mirrors `OutputFormat` in [`liteparse/src/core/types.ts`].
+/// Mirrors `OutputFormat` in `liteparse/src/core/types.ts`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum OutputFormat {
@@ -73,7 +73,7 @@ impl Language {
 }
 
 /// Full parser configuration. Defaults are identical to
-/// `DEFAULT_CONFIG` in [`liteparse/src/core/config.ts`].
+/// `DEFAULT_CONFIG` in `liteparse/src/core/config.ts`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParseConfig {
@@ -93,7 +93,7 @@ pub struct ParseConfig {
     pub preserve_very_small_text: bool,
     pub preserve_layout_alignment_across_pages: bool,
     /// When true, detect tabular regions on each page and attach them
-    /// to [`ParsedPage::tables`]. Off by default — adds a small
+    /// to [`ParsedPage::tables`](crate::ParsedPage::tables). Off by default — adds a small
     /// post-projection pass that costs ~O(items) per page.
     pub detect_tables: bool,
     /// When true, drop running headers/footers: lines repeated verbatim in
@@ -105,7 +105,7 @@ pub struct ParseConfig {
     pub strip_running_text: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
-    /// Fail `parse()` with [`SpdfError::InvalidInput`] once wall-clock
+    /// Fail `parse()` with [`SpdfError::InvalidInput`](crate::SpdfError::InvalidInput) once wall-clock
     /// work exceeds this many seconds. `None` = no deadline. Intended
     /// as a defensive guard against pathological adversarial PDFs;
     /// legitimate documents should never hit this.

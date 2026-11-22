@@ -429,13 +429,9 @@ fn looks_tabular(rows: &[Vec<String>]) -> bool {
         }
     }
     // A first column made only of bullets / list markers is a list.
-    if rows
+    !rows
         .iter()
         .all(|r| r[0].is_empty() || is_list_marker(&r[0]))
-    {
-        return false;
-    }
-    true
 }
 
 fn is_list_marker(s: &str) -> bool {

@@ -3,7 +3,7 @@
 //! - [`NeuralOcrEngine`] (feature `neural`): built-in PP-OCRv5 detection +
 //!   recognition running on the GPU through Burn/wgpu, CPU fallback.
 //! - [`HttpOcrEngine`] (feature `http`): remote OCR server.
-//! - [`TesseractEngine`] (feature `tesseract`): system libtesseract.
+//! - `TesseractEngine` (feature `tesseract`): system libtesseract.
 
 #![warn(clippy::all)]
 

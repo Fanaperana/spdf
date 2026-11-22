@@ -21,7 +21,7 @@ pub struct MarkupData {
 
 /// An individual text element extracted from a page.
 ///
-/// Matches `TextItem` in [`liteparse/src/core/types.ts`]. Coordinates use PDF
+/// Matches `TextItem` in `liteparse/src/core/types.ts`. Coordinates use PDF
 /// points, top-left origin, y increasing downward.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

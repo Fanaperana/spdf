@@ -162,7 +162,7 @@ const FUSE_STEP_TOL: usize = 2;
 /// dictionary lacks).
 ///
 /// The two character sequences are aligned by edit distance, pairing only
-/// characters whose timesteps are within [`FUSE_STEP_TOL`]. Then:
+/// characters whose timesteps are within `FUSE_STEP_TOL` (2) steps. Then:
 /// - agreeing characters are kept;
 /// - on a disagreement, a glyph the *other* model cannot express at all
 ///   wins (that model was forced to its nearest base letter: `ï` vs `i`,
