@@ -139,7 +139,12 @@ impl Columns {
 
 /// Find tables in projected page `lines`, in order, non-overlapping.
 pub(crate) fn find_tables(lines: &[&str]) -> Vec<MdTable> {
-    let segs: Vec<Vec<Seg>> = lines.iter().map(|l| segments(l)).collect();
+    let mut segs: Vec<Vec<Seg>> = lines.iter().map(|l| segments(l)).collect();
+    for i in 0..segs.len().saturating_sub(1) {
+        if let Some(words) = split_tight_header(lines[i], &segs[i], &segs[i + 1]) {
+            segs[i] = words;
+        }
+    }
     let mut out = Vec::new();
     let mut i = 0;
     while i < lines.len() {
@@ -154,6 +159,62 @@ pub(crate) fn find_tables(lines: &[&str]) -> Vec<MdTable> {
         i = next.max(i + 1);
     }
     out
+}
+
+/// Header rows are often set tighter than the data below them: short
+/// column labels separated by a single space ("ARC HellaSwag MMLU") sit over
+/// numeric cells with wide gutters. Such a line reads as one run of text, so
+/// re-split it into words when it is followed by a multi-cell line and its
+/// words map one-to-one, in order, onto that line's cells (each word
+/// overlapping its cell's span, give or take one column).
+/// Lines ending like a sentence or caption are never split.
+fn split_tight_header(line: &str, segs: &[Seg], below: &[Seg]) -> Option<Vec<Seg>> {
+    if below.len() < 3 || segs.is_empty() || segs.len() >= below.len() {
+        return None;
+    }
+    let trimmed = line.trim_end();
+    if trimmed.ends_with(['.', ':', ',', ';']) {
+        return None;
+    }
+    let mut words = Vec::new();
+    let mut start = None;
+    for (i, ch) in line.chars().chain(std::iter::once(' ')).enumerate() {
+        match (ch.is_whitespace(), start) {
+            (false, None) => start = Some(i),
+            (true, Some(st)) => {
+                words.push(Seg {
+                    start: st,
+                    end: i,
+                    text: line.chars().skip(st).take(i - st).collect(),
+                });
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if words.len() != below.len() {
+        return None;
+    }
+    let fits = words
+        .iter()
+        .zip(below)
+        .all(|(w, b)| overlaps((w.start, w.end), (b.start.saturating_sub(1), b.end + 1)));
+    if !fits {
+        return None;
+    }
+    // The labels are narrower-spaced than the data; give each the span of
+    // the cell it heads so the block's columns follow the data gutters.
+    Some(
+        words
+            .into_iter()
+            .zip(below)
+            .map(|(w, b)| Seg {
+                start: b.start,
+                end: b.end,
+                text: w.text,
+            })
+            .collect(),
+    )
 }
 
 /// Grow a table block starting at multi-cell line `start`. Returns the table
@@ -464,6 +525,47 @@ mod tests {
     #[test]
     fn single_aligned_line_is_not_a_table() {
         let lines = ["Name     Value", "plain prose follows here"];
+        assert!(find_tables(&lines).is_empty());
+    }
+
+    #[test]
+    fn tight_header_over_wide_data_row_is_a_table() {
+        let lines = [
+            "Some prose before the table.",
+            "ARC HellaSwag MMLU TruthfulQA Winogrande GSM8K",
+            " 0.06   N/A     0.15    0.28      N/A      0.70",
+            "Table 9: Data contamination results.",
+        ];
+        let t = find_tables(&lines);
+        assert_eq!(t.len(), 1, "{t:?}");
+        assert_eq!((t[0].first, t[0].last), (1, 2));
+        assert_eq!(
+            t[0].rows[0],
+            [
+                "ARC",
+                "HellaSwag",
+                "MMLU",
+                "TruthfulQA",
+                "Winogrande",
+                "GSM8K"
+            ]
+        );
+        assert_eq!(t[0].rows[1], ["0.06", "N/A", "0.15", "0.28", "N/A", "0.70"]);
+    }
+
+    #[test]
+    fn prose_above_aligned_row_is_not_split() {
+        // Word count differs from the cells below: left alone.
+        let lines = [
+            "We report the scores of each model below here",
+            " 0.06   N/A     0.15    0.28      N/A      0.70",
+        ];
+        assert!(find_tables(&lines).is_empty());
+        // Sentence ending in a period is never a header.
+        let lines = [
+            "ARC is HellaSwag the MMLU score TruthfulQA.",
+            " 0.06   N/A     0.15    0.28",
+        ];
         assert!(find_tables(&lines).is_empty());
     }
 
