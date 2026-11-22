@@ -15,6 +15,7 @@ mod gutter;
 mod pdfium_engine;
 #[cfg_attr(not(feature = "pdfium"), allow(dead_code))]
 mod rtl;
+mod segtext;
 
 pub use engine::{ExtractOptions, PageData, PdfDocumentHandle, PdfEngine};
 

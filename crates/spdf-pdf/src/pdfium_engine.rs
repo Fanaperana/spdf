@@ -272,9 +272,18 @@ impl PdfEngine for PdfiumEngine {
                 .map_err(|e| SpdfError::Pdf(format!("page {page_num} text: {e:?}")))?;
 
             let mut items: Vec<TextItem> = Vec::new();
-            for segment in text_page.segments().iter() {
+            let all_segments = text_page.segments();
+            let segments: Vec<_> = all_segments.iter().collect();
+            // Exact per-segment text from the page's characters; PDFium's
+            // rectangle query re-reads overlapping neighbours' glyphs.
+            let exact = segment_texts(&text_page, &segments);
+            for (si, segment) in segments.iter().enumerate() {
                 let rect = segment.bounds();
-                let str_content = segment.text();
+                let seg_exact = exact.as_ref().map(|e| &e[si]);
+                let str_content = match seg_exact {
+                    Some(e) => e.text.clone(),
+                    None => segment.text(),
+                };
                 if str_content.is_empty() {
                     continue;
                 }
@@ -293,14 +302,18 @@ impl PdfEngine for PdfiumEngine {
                 // visible glyph: the bbox height depends on which glyphs the
                 // run contains (x-height vs. ascenders), which makes it a
                 // noisy signal for heading detection.
-                let (font_size, font_name) = segment_font(&segment);
+                let (font_size, font_name) = segment_font(segment);
                 let size = font_size.unwrap_or(item_h).max(1.0);
                 ti.font_size = Some(size);
                 ti.font_name = font_name;
                 // Table rows drawn as one run come back as one segment;
                 // cut it at column gutters so cells stay apart.
                 if crate::gutter::suspicious(&ti.str, item_w, size) {
-                    if let Some(pieces) = segment_gutters(&segment, &ti.str, size) {
+                    let pieces = match seg_exact {
+                        Some(e) => crate::gutter::split(&ti.str, &e.glyphs, size),
+                        None => segment_gutters(segment, &ti.str, size),
+                    };
+                    if let Some(pieces) = pieces {
                         for p in pieces {
                             let mut part =
                                 TextItem::new(p.text, p.left, y_top, p.right - p.left, ti.height);
@@ -687,6 +700,49 @@ fn page_glyphs(
         });
     }
     out
+}
+
+/// Re-derive every segment's text from the page's characters (see
+/// [`crate::segtext`]). `None` keeps PDFium's rectangle-based text.
+fn segment_texts(
+    text_page: &pdfium_render::prelude::PdfPageText<'_>,
+    segments: &[pdfium_render::prelude::PdfPageTextSegment<'_>],
+) -> Option<Vec<crate::segtext::SegText>> {
+    use crate::segtext::{PageChar, Rect};
+    if segments.is_empty() {
+        return None;
+    }
+    let to_rect = |r: pdfium_render::prelude::PdfRect| Rect {
+        left: r.left().value as f64,
+        bottom: r.bottom().value as f64,
+        right: r.right().value as f64,
+        top: r.top().value as f64,
+    };
+    let rects: Vec<Rect> = segments.iter().map(|s| to_rect(s.bounds())).collect();
+    let chars = text_page.chars();
+    let mut page_chars = Vec::with_capacity(chars.len());
+    for ch in chars.iter() {
+        let Some(text) = ch.unicode_string() else {
+            continue;
+        };
+        let generated = ch.is_generated().unwrap_or(false);
+        let (rect, extent) = if generated {
+            (None, None)
+        } else {
+            let extent = ch
+                .loose_bounds()
+                .ok()
+                .map(|r| (r.left().value as f64, r.right().value as f64));
+            (ch.tight_bounds().ok().map(to_rect), extent)
+        };
+        page_chars.push(PageChar {
+            text,
+            generated,
+            rect,
+            extent,
+        });
+    }
+    crate::segtext::assign(&page_chars, &rects)
 }
 
 /// Split a segment at column gutters using its glyphs' horizontal extents.
