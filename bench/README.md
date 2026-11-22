@@ -21,6 +21,10 @@ a robustness case) and strict wins on `odl.overall`, `odl.nid`, `odl.teds`, `odl
 `edge.nid_mean`, `edge.f1_mean`. Tie bands: 0.0005 on aggregates, 0.005 per edge case, 3% on
 time/memory.
 
+**Regression gate** (used by the improvement loop before every commit): no spdf metric may drop by
+more than 0.002 on aggregates (0.003 TEDS/MHS), 0.01 on any edge case, or 20–25% on time/memory —
+except that a time/memory cost is tolerated while spdf still beats LiteParse on that metric.
+
 ## Run
 
 ```powershell

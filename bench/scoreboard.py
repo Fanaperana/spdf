@@ -102,6 +102,7 @@ def gate(baseline: dict, cand: dict) -> tuple[bool, list[str], list[str]]:
     """Return (ok, regressions, improvements) for spdf between two runs."""
     regs, imps = [], []
     b_rows = {n: (sv, d, tie, reg) for n, sv, _, d, tie, reg in metric_rows(baseline)}
+    cand_status = {r["metric"]: r["status"] for r in compare_engines(cand)["rows"]}
     for n, cv, _, d, tie, reg in metric_rows(cand):
         if n not in b_rows:
             continue
@@ -111,13 +112,22 @@ def gate(baseline: dict, cand: dict) -> tuple[bool, list[str], list[str]]:
                 regs.append(f"{n}: missing in candidate")
             continue
         delta = (cv - bv) * d
+        perf = n.endswith(("sec_per_doc", "huge_sec", "rss_mb"))
         if delta < -_tol(reg, bv):
+            if perf and cand_status.get(n) == "win":
+                # speed/memory headroom may be spent on accuracy as long as spdf still
+                # beats LiteParse on that metric; it is reported, not blocking
+                imps.append(f"(perf cost, still ahead of LiteParse) {n}: {fmt(bv)} -> {fmt(cv)}")
+                continue
             regs.append(f"{n}: {fmt(bv)} -> {fmt(cv)}")
         elif delta > _tol(tie, bv) and not n.endswith(("sec_per_doc", "huge_sec", "rss_mb")):
             imps.append(f"{n}: {fmt(bv)} -> {fmt(cv)}")
         elif delta > _tol(reg, bv):  # speed/memory only count when clearly outside noise
             imps.append(f"{n}: {fmt(bv)} -> {fmt(cv)}")
-    return (not regs), regs, imps
+    real = [i for i in imps if not i.startswith("(perf cost")]
+    notes = [i for i in imps if i.startswith("(perf cost")]
+    # perf-cost notes ride along with real improvements but never count as one on their own
+    return (not regs), regs, (real + notes) if real else []
 
 
 def render_md(run: dict, cmp: dict, history: list[dict]) -> str:
