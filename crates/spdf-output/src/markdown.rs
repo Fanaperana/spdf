@@ -36,11 +36,29 @@ fn round_half(v: f64) -> f64 {
 }
 
 fn is_bold(it: &TextItem) -> bool {
-    it.font_name.as_deref().is_some_and(|n| {
-        let n = n.to_ascii_lowercase();
-        ["bold", "black", "heavy", "semibold", "demi"]
-            .iter()
-            .any(|k| n.contains(k))
+    it.font_name.as_deref().is_some_and(is_bold_name)
+}
+
+/// Whether a PostScript font name denotes a bold face. Besides the usual
+/// weight words this knows the TeX naming scheme, where weight is encoded
+/// in the family abbreviation (`CMBX12`, `CMB10`, `CMSSBX10`, `ECBX1200`).
+fn is_bold_name(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    // Drop a subset tag such as `ABCDEF+`.
+    let base = match n.split_once('+') {
+        Some((tag, rest)) if tag.len() == 6 => rest,
+        _ => n.as_str(),
+    };
+    if ["bold", "black", "heavy", "semibold", "demi"]
+        .iter()
+        .any(|k| base.contains(k))
+    {
+        return true;
+    }
+    const TEX_BOLD: [&str; 6] = ["cmbx", "cmb", "cmssbx", "ecbx", "ecrb", "ecsx"];
+    TEX_BOLD.iter().any(|p| {
+        base.strip_prefix(p)
+            .is_some_and(|rest| rest.chars().next().is_some_and(|c| c.is_ascii_digit()))
     })
 }
 
@@ -132,60 +150,158 @@ fn collapse_ws(s: &str) -> String {
 /// Map from whitespace-stripped line text to heading level for every visual
 /// line on the page made only of heading-styled items.
 fn heading_lines(page: &ParsedPage, style: &DocStyle) -> HashMap<String, usize> {
-    let mut items: Vec<(&TextItem, usize)> = page
-        .text_items
-        .iter()
-        .filter(|it| usable(it))
-        .filter_map(|it| style.level_of(it).map(|l| (it, l)))
-        .collect();
-    items.sort_by(|a, b| a.0.y.total_cmp(&b.0.y).then(a.0.x.total_cmp(&b.0.x)));
-
-    // Greedy grouping into visual lines: same baseline band, same level,
-    // horizontally close (gaps up to 4 em cover tab-separated numbering).
-    struct Line<'a> {
-        items: Vec<&'a TextItem>,
-        level: usize,
-        y_mid: f64,
-        left: f64,
-        right: f64,
-        size: f64,
+    let mut items: Vec<(&TextItem, usize)> = Vec::new();
+    let mut others: Vec<&TextItem> = Vec::new();
+    for it in page.text_items.iter().filter(|it| usable(it)) {
+        match style.level_of(it) {
+            Some(l) => items.push((it, l)),
+            None => others.push(it),
+        }
     }
-    let mut lines: Vec<Line> = Vec::new();
-    for (it, level) in items {
-        let size = it.font_size.unwrap_or(it.height).max(1.0);
-        let y_mid = it.y + it.height / 2.0;
-        let found = lines.iter_mut().rev().take(8).find(|l| {
-            l.level == level
-                && (l.y_mid - y_mid).abs() < 0.5 * size.min(l.size)
-                && it.x - l.right < 4.0 * size
-                && l.left - (it.x + it.width) < 4.0 * size
-        });
-        match found {
-            Some(l) => {
-                l.left = l.left.min(it.x);
-                l.right = l.right.max(it.x + it.width);
-                l.items.push(it);
+    let heading_count = items.len();
+    items.extend(small_caps(&items, &others));
+    let is_heading = |it: &TextItem| {
+        items[..heading_count]
+            .iter()
+            .any(|(h, _)| std::ptr::eq(*h, it))
+    };
+    let lines = group_lines(items.clone());
+    let mut out = HashMap::new();
+    for (line, level) in lines {
+        // Lines made only of small-cap letters carry no heading signal.
+        if !line.iter().any(|it| is_heading(it)) {
+            continue;
+        }
+        let key: String = line.iter().map(|it| strip_ws(&it.str)).collect();
+        out.entry(key)
+            .and_modify(|lv: &mut usize| *lv = (*lv).min(level))
+            .or_insert(level);
+    }
+    out
+}
+
+/// Small-capital companions of heading items. Small-caps headings typeset
+/// each word's initial at the heading size and the remaining capitals
+/// smaller, in the same font. Such reduced items are adopted at the level
+/// of the heading font they belong to, so the whole line is recognised.
+fn small_caps<'a>(
+    headings: &[(&'a TextItem, usize)],
+    others: &[&'a TextItem],
+) -> Vec<(&'a TextItem, usize)> {
+    if headings.is_empty() {
+        return Vec::new();
+    }
+    others
+        .iter()
+        .filter(|it| {
+            let letters = it.str.chars().filter(|c| c.is_alphabetic());
+            let mut any = false;
+            for c in letters {
+                if !c.is_uppercase() {
+                    return false;
+                }
+                any = true;
             }
-            None => lines.push(Line {
-                items: vec![it],
-                level,
-                y_mid,
-                left: it.x,
-                right: it.x + it.width,
-                size,
-            }),
+            any
+        })
+        .filter_map(|it| {
+            let size = it.font_size?;
+            headings
+                .iter()
+                .filter(|(h, _)| {
+                    let hs = h.font_size.unwrap_or_default();
+                    h.font_name == it.font_name && size < hs && size >= 0.6 * hs
+                })
+                .map(|(_, lv)| *lv)
+                .min()
+                .map(|lv| (*it, lv))
+        })
+        .collect()
+}
+
+/// Group heading-styled items into visual lines, each sorted left to right.
+///
+/// Items of one level are first clustered into baseline bands (vertical
+/// centres within half an em of the band's first item), so sub-point
+/// baseline jitter between words of the same line cannot interleave them
+/// with other fragments. Each band is then split wherever the horizontal
+/// gap exceeds 4 em (wider than tab-separated numbering, narrower than a
+/// column gutter), keeping side-by-side headings apart.
+fn group_lines(mut items: Vec<(&TextItem, usize)>) -> Vec<(Vec<&TextItem>, usize)> {
+    let size_of = |it: &TextItem| it.font_size.unwrap_or(it.height).max(1.0);
+    let mid = |it: &TextItem| it.y + it.height / 2.0;
+    items.sort_by(|a, b| a.1.cmp(&b.1).then(mid(a.0).total_cmp(&mid(b.0))));
+
+    let mut bands: Vec<(Vec<&TextItem>, usize)> = Vec::new();
+    for (it, level) in items {
+        let joins = bands.last().is_some_and(|(band, lv)| {
+            let first = band[0];
+            *lv == level && (mid(first) - mid(it)).abs() < 0.5 * size_of(it).min(size_of(first))
+        });
+        if joins {
+            bands.last_mut().expect("band exists").0.push(it);
+        } else {
+            bands.push((vec![it], level));
         }
     }
 
-    let mut out = HashMap::new();
-    for mut l in lines {
-        l.items.sort_by(|a, b| a.x.total_cmp(&b.x));
-        let key: String = l.items.iter().map(|it| strip_ws(&it.str)).collect();
-        out.entry(key)
-            .and_modify(|lv: &mut usize| *lv = (*lv).min(l.level))
-            .or_insert(l.level);
+    let mut lines = Vec::new();
+    for (mut band, level) in bands {
+        band.sort_by(|a, b| a.x.total_cmp(&b.x));
+        let mut cur: Vec<&TextItem> = Vec::new();
+        let mut right = f64::NEG_INFINITY;
+        for it in band {
+            if !cur.is_empty() && it.x - right >= 4.0 * size_of(it) {
+                lines.push((std::mem::take(&mut cur), level));
+                right = f64::NEG_INFINITY;
+            }
+            right = right.max(it.x + it.width);
+            cur.push(it);
+        }
+        if !cur.is_empty() {
+            lines.push((cur, level));
+        }
     }
-    out
+    // Restore top-to-bottom order so the first occurrence of a key wins
+    // consistently.
+    lines.sort_by(|a, b| {
+        a.0[0]
+            .y
+            .total_cmp(&b.0[0].y)
+            .then(a.0[0].x.total_cmp(&b.0[0].x))
+    });
+    lines
+}
+
+/// Heading level of a projected text line, if any. A trailing footnote
+/// marker (`Title 2`, `Title*`) is typeset smaller than the heading, so the
+/// line is also matched with that marker removed.
+fn heading_level(headings: &HashMap<String, usize>, line: &str) -> Option<usize> {
+    if let Some(lv) = headings.get(&strip_ws(line)) {
+        return Some(*lv);
+    }
+    let trimmed = line.trim_end();
+    let is_marker = |c: char| c.is_ascii_digit() || "*†‡§".contains(c);
+    let marker_len: usize = trimmed
+        .chars()
+        .rev()
+        .take_while(|c| is_marker(*c))
+        .map(char::len_utf8)
+        .sum();
+    let marker_chars = trimmed[trimmed.len() - marker_len..].chars().count();
+    if marker_len == 0 || marker_chars > 2 {
+        return None;
+    }
+    let rest = &trimmed[..trimmed.len() - marker_len];
+    if !rest.ends_with(|c: char| c.is_alphabetic() || c.is_whitespace()) {
+        return None;
+    }
+    let key = strip_ws(rest);
+    // A bare number is not a heading with a footnote.
+    if !key.chars().any(char::is_alphabetic) {
+        return None;
+    }
+    headings.get(&key).copied()
 }
 
 fn plausible_heading(text: &str) -> bool {
@@ -266,10 +382,7 @@ pub fn page_to_markdown(page: &ParsedPage, style: &DocStyle) -> String {
             continue;
         }
         let text = collapse_ws(line);
-        let level = headings
-            .get(&strip_ws(line))
-            .copied()
-            .filter(|_| plausible_heading(&text));
+        let level = heading_level(&headings, line).filter(|_| plausible_heading(&text));
         match level {
             Some(lv) if open == Some(lv) => {
                 // Continuation of a heading wrapped over several lines.
@@ -411,5 +524,120 @@ mod tests {
         let p = page("all bold text\nall bold text", items);
         let md = page_to_markdown(&p, &DocStyle::from_pages([&p]));
         assert!(!md.contains('#'), "{md}");
+    }
+
+    #[test]
+    fn jittered_baseline_words_form_one_heading() {
+        // Words of one bold line whose baselines differ by a fraction of a
+        // point must not be split into two interleaved fragments.
+        let mut items = vec![
+            item("PRICE", 57.0, 502.81, 11.0, "Lato-Bold"),
+            item("CEBO", 177.0, 502.81, 11.0, "Lato-Bold"),
+            item("EFFECT", 215.0, 502.81, 11.0, "Lato-Bold"),
+            item("AND", 96.0, 502.90, 11.0, "Lato-Bold"),
+            item("THE", 127.0, 502.90, 11.0, "Lato-Bold"),
+            item("PLA", 155.0, 502.90, 11.0, "Lato-Bold"),
+        ];
+        items.extend((0..8).map(|i| {
+            item(
+                "body text line with words",
+                57.0,
+                520.0 + i as f64 * 13.0,
+                11.0,
+                "Crimson-Roman",
+            )
+        }));
+        let p = page(
+            "PRICE AND THE PLACEBO EFFECT
+body text line with words",
+            items,
+        );
+        let style = DocStyle::from_pages([&p]);
+        let md = page_to_markdown(&p, &style);
+        assert!(
+            md.starts_with(
+                "# PRICE AND THE PLACEBO EFFECT
+"
+            ),
+            "{md}"
+        );
+    }
+
+    #[test]
+    fn distant_fragments_on_one_baseline_stay_apart() {
+        let items = [
+            item("Left", 50.0, 20.0, 10.0, "Times-Bold"),
+            item("Right", 400.0, 20.0, 10.0, "Times-Bold"),
+        ];
+        let lines = group_lines(items.iter().map(|it| (it, 1)).collect());
+        assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn tex_bold_font_names_are_bold() {
+        assert!(is_bold_name("CMBX12"));
+        assert!(is_bold_name("ABCDEF+CMBX10"));
+        assert!(is_bold_name("CMB10"));
+        assert!(is_bold_name("Helvetica-Bold"));
+        assert!(!is_bold_name("CMR10"));
+        assert!(!is_bold_name("CMBRIGHT"));
+        assert!(!is_bold_name("Cambria"));
+    }
+
+    #[test]
+    fn trailing_footnote_marker_keeps_heading() {
+        let mut items = vec![
+            item("Fact-Checking", 50.0, 40.0, 16.0, "Times"),
+            item("2", 150.0, 38.0, 7.0, "Times"),
+        ];
+        items.extend(body_items(5, 70.0));
+        let p = page(
+            "Fact-Checking 2
+body text line with words",
+            items,
+        );
+        let style = DocStyle::from_pages([&p]);
+        let md = page_to_markdown(&p, &style);
+        assert!(
+            md.starts_with(
+                "# Fact-Checking 2
+"
+            ),
+            "{md}"
+        );
+        // A body line that is just a number never becomes a heading.
+        let mut h = HashMap::new();
+        h.insert(String::new(), 1);
+        assert_eq!(heading_level(&h, "12"), None);
+    }
+
+    #[test]
+    fn small_caps_heading_is_recognised() {
+        let mut items = vec![
+            item("3.", 120.0, 89.5, 14.0, "Calibri-Light"),
+            item("R", 158.0, 89.6, 14.0, "Calibri-Light"),
+            item("ECOLLECTION OF", 165.0, 92.0, 11.0, "Calibri-Light"),
+            item("N", 244.0, 89.6, 14.0, "Calibri-Light"),
+            item("ATIONAL", 252.0, 92.0, 11.0, "Calibri-Light"),
+        ];
+        items.extend(body_items(8, 120.0));
+        // Same font and size as the reduced caps but alone on its line.
+        items.push(item("NOTE", 50.0, 300.0, 11.0, "Calibri-Light"));
+        let p = page(
+            "3. RECOLLECTION OF NATIONAL
+body text line with words
+NOTE",
+            items,
+        );
+        let style = DocStyle::from_pages([&p]);
+        let md = page_to_markdown(&p, &style);
+        assert!(
+            md.starts_with(
+                "# 3. RECOLLECTION OF NATIONAL
+"
+            ),
+            "{md}"
+        );
+        assert!(!md.contains("# NOTE"), "{md}");
     }
 }
