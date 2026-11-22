@@ -234,7 +234,7 @@ fn suppress_late_stderr() {
     // Safety: we're about to exit; overwriting fd 2 only affects writes that
     // happen after this point (i.e. C++ static destructors in libtesseract).
     unsafe {
-        let devnull = libc::open(b"/dev/null\0".as_ptr() as *const _, libc::O_WRONLY);
+        let devnull = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
         if devnull >= 0 {
             libc::dup2(devnull, 2);
             libc::close(devnull);
