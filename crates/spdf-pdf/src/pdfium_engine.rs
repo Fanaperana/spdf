@@ -428,6 +428,13 @@ fn extract_loaded(
                 })
                 .collect();
         }
+    } else {
+        // Hyphens that end a line come back as PDFium's U+0002 marker.
+        for it in &mut items {
+            if let Some(s) = crate::segtext::restore_line_end_hyphen(&it.str) {
+                it.str = s;
+            }
+        }
     }
 
     // Values typed into interactive form fields live in widget

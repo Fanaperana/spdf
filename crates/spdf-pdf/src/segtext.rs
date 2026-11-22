@@ -67,6 +67,33 @@ fn is_visible(c: char) -> bool {
     !c.is_whitespace() && c != '\u{2}'
 }
 
+/// Turn PDFium's end-of-line hyphenation marker back into the hyphen the
+/// page draws. PDFium reports a `-` (or soft hyphen) that ends a line as
+/// U+0002, which is invisible in plain text and loses the break the
+/// reader sees ("weav-" / "ings" became "weav" / "ings"). Only a marker
+/// closing a run (trailing whitespace allowed) right after a printable
+/// character is rewritten, so raw glyph codes from fonts without a
+/// ToUnicode map (`"\u{1}\u{2}\u{3}"`) stay untouched for the CID-font
+/// recovery.
+pub(crate) fn restore_line_end_hyphen(text: &str) -> Option<String> {
+    let body = text.trim_end_matches(|c: char| c.is_whitespace());
+    let before = body.strip_suffix('\u{2}')?;
+    // PDFium often gives the marker a rectangle of its own; a run holding
+    // nothing but the marker is the hyphen itself.
+    let lone = before.trim_start_matches(|c: char| c.is_whitespace());
+    if !lone.is_empty() {
+        let prev = before.chars().next_back()?;
+        if prev.is_control() || prev.is_whitespace() || prev == '-' {
+            return None;
+        }
+    }
+    let mut out = String::with_capacity(text.len());
+    out.push_str(before);
+    out.push('-');
+    out.push_str(&text[body.len()..]);
+    Some(out)
+}
+
 /// Assign `chars` to `segments` (both in PDFium order). Segments may come
 /// back empty (PDFium also emits rectangles for soft-hyphen markers and
 /// lone spaces). Returns `None` when too many visible characters fit no
@@ -149,6 +176,25 @@ pub(crate) fn assign(chars: &[PageChar], segments: &[Rect]) -> Option<Vec<SegTex
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_end_marker_becomes_a_hyphen() {
+        assert_eq!(
+            restore_line_end_hyphen("weav\u{2}").as_deref(),
+            Some("weav-")
+        );
+        assert_eq!(
+            restore_line_end_hyphen("mass-pro\u{2} ").as_deref(),
+            Some("mass-pro- ")
+        );
+        // No marker, or a marker that is not a line-end hyphen.
+        assert_eq!(restore_line_end_hyphen("plain text"), None);
+        assert_eq!(restore_line_end_hyphen("\u{2}").as_deref(), Some("-"));
+        assert_eq!(restore_line_end_hyphen(" \u{2}").as_deref(), Some(" -"));
+        assert_eq!(restore_line_end_hyphen("\u{1}\u{2}"), None);
+        assert_eq!(restore_line_end_hyphen("a\u{2}b"), None);
+        assert_eq!(restore_line_end_hyphen("x \u{2}"), None);
+    }
 
     fn rect(l: f64, b: f64, r: f64, t: f64) -> Rect {
         Rect {
