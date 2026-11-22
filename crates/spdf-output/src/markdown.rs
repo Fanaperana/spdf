@@ -451,6 +451,45 @@ fn sized_like_heading(text: &str) -> bool {
         && !text.ends_with(',')
 }
 
+/// Whether a word is a page locator in a table of contents: an arabic page
+/// number (`17`) or a lowercase roman numeral (`vii`) for front matter.
+fn is_page_locator(w: &str) -> bool {
+    let n = w.chars().count();
+    (1..=4).contains(&n) && w.chars().all(|c| c.is_ascii_digit())
+        || (1..=6).contains(&n) && w.chars().all(|c| "ivxlc".contains(c))
+}
+
+/// Whether a dot leader (`.....`, `…`) fills the space before a locator.
+fn has_dot_leader(text: &str) -> bool {
+    text.contains("...") || text.contains('…')
+}
+
+/// A table-of-contents entry: a title followed, after a dot leader or a
+/// wide gap, by a page locator (`Introduction ........ 1`,
+/// `Acknowledgments          vii`).
+fn is_toc_entry(raw: &str) -> bool {
+    let line = raw.trim();
+    let Some((head, last)) = line.rsplit_once(|c: char| c.is_whitespace() || c == '.' || c == '…')
+    else {
+        return false;
+    };
+    if !is_page_locator(last) || !head.chars().any(char::is_alphabetic) {
+        return false;
+    }
+    has_dot_leader(head) || head.ends_with("  ")
+}
+
+/// Whether line `idx` sits inside a table of contents: the nearest
+/// non-blank lines above and below are both contents entries. Bold or
+/// enlarged part titles inside a contents listing repeat the document's
+/// headings rather than open a section, so they stay plain text.
+fn inside_toc(lines: &[&str], idx: usize) -> bool {
+    let nonblank = |l: &&&str| !l.trim().is_empty();
+    let prev = lines[..idx].iter().rev().find(nonblank);
+    let next = lines[idx + 1..].iter().find(nonblank);
+    matches!((prev, next), (Some(p), Some(n)) if is_toc_entry(p) && is_toc_entry(n))
+}
+
 /// Tables on a page, in line order and non-overlapping: bordered tables
 /// recovered from the page's rules first, then text-aligned tables found
 /// in the remaining lines.
@@ -551,6 +590,8 @@ pub fn page_to_markdown(page: &ParsedPage, style: &DocStyle) -> String {
         };
         let mut level = styled.filter(|lv| {
             plausible_heading(candidate)
+                && !(is_toc_entry(raw) && has_dot_leader(raw))
+                && !inside_toc(&lines, idx - 1)
                 // A wrapped heading may continue in lowercase.
                 && (open == Some(*lv) || !continues_paragraph(prev_body, &text))
         });
@@ -656,6 +697,37 @@ mod tests {
         assert!(md.contains("# Title\n"), "{md}");
         assert!(md.contains("## Section\n"), "{md}");
         assert!(md.contains("### Sub\n"), "{md}");
+    }
+
+    #[test]
+    fn part_titles_inside_contents_are_not_headings() {
+        let mut items = vec![
+            item("Contents", 50.0, 20.0, 18.0, "Times"),
+            item("Part I. Exploring Data", 50.0, 70.0, 10.0, "Times-Bold"),
+            item("Part II. Testing", 50.0, 106.0, 10.0, "Times-Bold"),
+        ];
+        items.extend(body_items(8, 130.0));
+        let text = "Contents\n\nIntroduction          1\nPart I. Exploring Data\n\
+                    Section 1.1: Data ......... 3\nPreface ........ vii\nPart II. Testing\n\
+                    Section 2.1: p Values ...... 12\nPart II. Testing\n\nbody text line with words";
+        let p = page(text, items);
+        let md = page_to_markdown(&p, &DocStyle::from_pages([&p]));
+        assert!(md.starts_with("# Contents\n"), "{md}");
+        assert!(md.contains("\nPart I. Exploring Data\n"), "{md}");
+        assert!(md.contains("\nPart II. Testing\nSection 2.1"), "{md}");
+        // Past the listing the same styled line is a heading again.
+        assert!(md.contains("\n## Part II. Testing\n"), "{md}");
+    }
+
+    #[test]
+    fn toc_entry_predicates() {
+        assert!(is_toc_entry("Introduction          1"));
+        assert!(is_toc_entry("Acknowledgments     vii"));
+        assert!(is_toc_entry("Lab worksheet..........3"));
+        assert!(is_toc_entry("Cellular Biology……32"));
+        assert!(!is_toc_entry("Revenue grew by 12"));
+        assert!(!is_toc_entry("Table 3"));
+        assert!(!is_toc_entry("2024"));
     }
 
     #[test]
