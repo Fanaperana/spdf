@@ -335,7 +335,7 @@ fn run_parse_streaming(
                 if !first {
                     writer.write_all(b"\n\n")?;
                 }
-                writer.write_all(page.text.as_bytes())?;
+                writer.write_all(spdf_output::page_text(&page).as_bytes())?;
             }
             OutputFormat::Markdown => {
                 // Streaming sees one page at a time, so typography stats

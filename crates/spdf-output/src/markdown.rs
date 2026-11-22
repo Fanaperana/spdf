@@ -202,7 +202,8 @@ pub fn page_to_markdown(page: &ParsedPage, style: &DocStyle) -> String {
     let mut out: Vec<String> = Vec::new();
     // Level of the heading that is currently open (for multi-line headings).
     let mut open: Option<usize> = None;
-    let lines: Vec<&str> = page.text.lines().collect();
+    let text = crate::page_text(page);
+    let lines: Vec<&str> = text.lines().collect();
     let tables = crate::md_table::find_tables(&lines);
     let mut next_table = tables.iter().peekable();
     let mut idx = 0;

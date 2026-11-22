@@ -2,9 +2,11 @@
 
 #![warn(clippy::all)]
 
+mod columns;
 mod markdown;
 mod md_table;
 
+pub use columns::reflow_columns;
 pub use markdown::{DocStyle, format_markdown, page_to_markdown};
 
 use spdf_types::{
@@ -16,9 +18,15 @@ pub fn format_text(result: &ParseResult) -> String {
     result
         .pages
         .iter()
-        .map(|p| p.text.as_str())
+        .map(page_text)
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+/// Plain text of one page in reading order: the projected layout with
+/// side-by-side prose columns emitted one after another.
+pub fn page_text(page: &ParsedPage) -> String {
+    reflow_columns(&page.text)
 }
 
 /// Build the JSON projection of a [`ParseResult`]. Matches
