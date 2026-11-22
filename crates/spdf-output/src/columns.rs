@@ -166,8 +166,15 @@ fn split_block(lines: &[Line], depth: usize) -> Option<(Vec<Line>, Vec<Line>)> {
             .zip(&right)
             .filter(|(a, b)| !is_blank(a) && !is_blank(b))
             .count();
-        let nonblank = lines.iter().filter(|l| !is_blank(l)).count();
-        if paired < MIN_PAIRED_LINES || paired * 5 < nonblank * 2 {
+        // Most lines of the shorter side must face text on the other: a
+        // column may run on alone (a page's last column usually ends
+        // early), but a short label beside a long text is no column.
+        let shorter = left
+            .iter()
+            .filter(|l| !is_blank(l))
+            .count()
+            .min(right.iter().filter(|l| !is_blank(l)).count());
+        if paired < MIN_PAIRED_LINES || paired * 5 < shorter * 2 {
             continue;
         }
         if !is_prose(&left) || too_many_holes(&left, &right) || too_many_holes(&right, &left) {
@@ -371,6 +378,28 @@ sustainability
         assert_eq!(lines[0], "Introduction to the topic here");
         assert_eq!(lines[11], "and the column then resumes.");
         assert_eq!(lines[12], "right column line number 00 here");
+    }
+
+    #[test]
+    fn short_right_column_beside_long_left_still_splits() {
+        // The last page of an article: the right column ends early and
+        // the left one runs on alone for many more lines.
+        let mut text = String::new();
+        for i in 0..14 {
+            let right = if i < 5 {
+                format!("right column line number {i:02} here")
+            } else {
+                String::new()
+            };
+            text.push_str(&format!(
+                "left column prose line number {i:02} x  {right}\n"
+            ));
+        }
+        let out = reflow_columns(text.trim_end());
+        let lines: Vec<&str> = out.lines().map(str::trim_end).collect();
+        assert_eq!(lines[13], "left column prose line number 13 x");
+        assert_eq!(lines[14], "right column line number 00 here");
+        assert_eq!(lines.len(), 19);
     }
 
     #[test]

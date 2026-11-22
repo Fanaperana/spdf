@@ -130,13 +130,23 @@ pub fn project_page(page: PageInput, debug: bool, preserve_small: bool) -> Parse
         );
     }
 
-    // Render each row onto a fixed-width character grid.
+    // Render each row onto a fixed-width character grid, keeping content
+    // right of each vertical gutter at one consistent grid column.
+    let shifts = gutter_shifts(&text_items, &rows, char_unit, page_left);
     let mut out = String::new();
     for (row_idx, row) in rows.iter().enumerate() {
         if row_idx > 0 {
             out.push('\n');
         }
-        render_row_grid(&text_items, row, char_unit, page_left, &mut out);
+        render_row_grid(
+            &text_items,
+            row,
+            char_unit,
+            page_left,
+            &shifts,
+            None,
+            &mut out,
+        );
     }
 
     let text = tidy_layout(&out);
@@ -651,11 +661,155 @@ fn estimate_char_unit(items: &[TextItem]) -> f64 {
 /// Spaces that always separate items across a column-sized gap.
 const MIN_COLUMN_GUTTER: usize = 2;
 
+/// Most gutters aligned per page (bounds the extra render passes).
+const MAX_ALIGNED_GUTTERS: usize = 8;
+/// Fewest rows that must carry text on each side of a gutter.
+const MIN_GUTTER_ROWS: usize = 3;
+
+/// Vertical whitespace gutters of the page in PDF points, as split
+/// positions (the middle of each gutter), left to right.
+///
+/// A gutter is an x-range at least a column gap wide that few rows cross
+/// (full-width titles and captions may) while several rows have text on
+/// both sides of it: the gutter between article columns or table columns.
+fn find_gutters(items: &[TextItem], rows: &[Row], char_unit: f64, page_left: f64) -> Vec<f64> {
+    let right = rows
+        .iter()
+        .flatten()
+        .map(|&i| items[i].x + items[i].width.max(0.0))
+        .fold(f64::NEG_INFINITY, f64::max);
+    if rows.len() < MIN_GUTTER_ROWS || right.is_nan() || right <= page_left {
+        return Vec::new();
+    }
+    // Coverage histogram: how many rows put ink over each bin.
+    let bins = ((right - page_left).ceil() as usize).clamp(1, 4000);
+    let bin_w = (right - page_left) / bins as f64;
+    let mut cross = vec![0usize; bins];
+    let mut row_bins = vec![false; bins];
+    for row in rows {
+        row_bins.iter_mut().for_each(|b| *b = false);
+        for &i in row {
+            let it = &items[i];
+            let a = ((it.x - page_left) / bin_w).floor().max(0.0) as usize;
+            let b = ((it.x + it.width.max(0.0) - page_left) / bin_w).ceil() as usize;
+            for v in row_bins.iter_mut().take(b.min(bins)).skip(a) {
+                *v = true;
+            }
+        }
+        for (c, &on) in cross.iter_mut().zip(&row_bins) {
+            *c += usize::from(on);
+        }
+    }
+    let tolerance = (rows.len() / 10).max(1);
+    let min_width = char_unit * 2.5;
+    let mut out = Vec::new();
+    let mut b = 0;
+    while b < bins {
+        if cross[b] > tolerance {
+            b += 1;
+            continue;
+        }
+        let start = b;
+        while b < bins && cross[b] <= tolerance {
+            b += 1;
+        }
+        if start == 0 || b >= bins {
+            continue;
+        }
+        let x0 = page_left + start as f64 * bin_w;
+        let x1 = page_left + b as f64 * bin_w;
+        if x1 - x0 < min_width {
+            continue;
+        }
+        // Rows with text only left / only right of the gap; a row that
+        // crosses it disqualifies nothing (tolerated above) but counts for
+        // neither side. Columns whose baselines do not line up yield
+        // one-sided rows only, so both kinds count.
+        let (mut left_rows, mut right_rows) = (0usize, 0usize);
+        for row in rows {
+            let mut left = false;
+            let mut rgt = false;
+            let mut crosses = false;
+            for &i in row {
+                let it = &items[i];
+                if it.x + it.width.max(0.0) <= x0 + bin_w {
+                    left = true;
+                } else if it.x >= x1 - bin_w {
+                    rgt = true;
+                } else {
+                    crosses = true;
+                }
+            }
+            if !crosses {
+                left_rows += usize::from(left);
+                right_rows += usize::from(rgt);
+            }
+        }
+        if left_rows >= MIN_GUTTER_ROWS && right_rows >= MIN_GUTTER_ROWS {
+            out.push((x0 + x1) / 2.0);
+        }
+    }
+    out.truncate(MAX_ALIGNED_GUTTERS);
+    out
+}
+
+/// Minimum grid column for text starting right of each gutter: one column
+/// gutter past the longest rendered text that precedes it on any row. The
+/// grid's char unit is a page median, so wide glyphs make text overrun its
+/// absolute column; without this the gutter between two article columns
+/// wanders from row to row and the columns can no longer be told apart.
+fn gutter_shifts(
+    items: &[TextItem],
+    rows: &[Row],
+    char_unit: f64,
+    page_left: f64,
+) -> Vec<(f64, usize)> {
+    let mut shifts: Vec<(f64, usize)> = Vec::new();
+    let mut scratch = String::new();
+    for g in find_gutters(items, rows, char_unit, page_left) {
+        let mut need = 0usize;
+        for row in rows {
+            scratch.clear();
+            let mut end = 0usize;
+            render_row_grid(
+                items,
+                row,
+                char_unit,
+                page_left,
+                &shifts,
+                Some((g, &mut end)),
+                &mut scratch,
+            );
+            need = need.max(end);
+        }
+        if need > 0 {
+            shifts.push((g, need + MIN_COLUMN_GUTTER));
+        }
+    }
+    shifts
+}
+
+/// Grid column for text starting at `x`: its absolute column, pushed right
+/// by any gutter alignment that applies to it.
+fn target_col(x: f64, char_unit: f64, page_left: f64, shifts: &[(f64, usize)]) -> usize {
+    let col = ((x - page_left) / char_unit).round().max(0.0) as usize;
+    shifts
+        .iter()
+        .filter(|(g, _)| x >= *g)
+        .map(|(_, c)| *c)
+        .fold(col, usize::max)
+}
+
+/// Render one row onto the grid. With `measure = Some((g, end))`, `end` is
+/// set to the rendered width of the text before the first item right of
+/// gutter `g` when the row has text on both sides of it.
 fn render_row_grid(
     items: &[TextItem],
     row: &Row,
     char_unit: f64,
     page_left: f64,
+    shifts: &[(f64, usize)],
+    mut measure: Option<(f64, &mut usize)>,
     out: &mut String,
 ) {
     let row_start = out.chars().count();
@@ -678,7 +832,7 @@ fn render_row_grid(
         };
 
         if pos == 0 {
-            let col = ((it.x - page_left) / char_unit).round().max(0.0) as usize;
+            let col = target_col(it.x, char_unit, page_left, shifts);
             for _ in 0..col {
                 out.push(' ');
             }
@@ -687,8 +841,14 @@ fn render_row_grid(
             let gap_pts = it.x - pr;
             let cur_cols = out.chars().count() - row_start;
             if gap_pts > column_gap {
-                // Wide gap: pad to the item's absolute column.
-                let col = ((it.x - page_left) / char_unit).round().max(0.0) as usize;
+                if let Some((g, end)) = measure.as_mut() {
+                    if pr <= *g && it.x >= *g {
+                        let trailing = out.chars().rev().take_while(|&c| c == ' ').count();
+                        **end = cur_cols - trailing;
+                    }
+                }
+                // Wide gap: pad to the item's (gutter-aligned) column.
+                let col = target_col(it.x, char_unit, page_left, shifts);
                 if cur_cols < col {
                     for _ in 0..(col - cur_cols) {
                         out.push(' ');
@@ -762,6 +922,90 @@ mod tests {
         };
         let out = project_page(page, false, false);
         assert_eq!(out.text.trim(), "Hello world");
+    }
+
+    #[test]
+    fn right_column_starts_at_one_grid_column_despite_overrun() {
+        // Two article columns split by a gutter at x=210..230. The first
+        // left line is set in narrow glyphs, so it renders past the right
+        // column's absolute grid column; the right column must still start
+        // at the same grid column on every line, past that overrun.
+        let mut items = Vec::new();
+        for r in 0..5 {
+            let y = 100.0 + 15.0 * r as f64;
+            let left = if r == 0 {
+                "x".repeat(50) // 4pt per glyph: overruns the grid
+            } else {
+                "y".repeat(40) // 5pt per glyph: the page median
+            };
+            items.push(ti(&left, 10.0, y, 200.0, 10.0));
+            items.push(ti(
+                &format!("right column line {r} text"),
+                230.0,
+                y,
+                120.0,
+                10.0,
+            ));
+        }
+        let page = PageInput {
+            page_num: 1,
+            width: 500.0,
+            height: 700.0,
+            text_items: items,
+        };
+        let out = project_page(page, false, false);
+        let starts: Vec<usize> = out
+            .text
+            .lines()
+            .map(|l| l.find("right").expect("right column text"))
+            .collect();
+        assert!(starts.iter().all(|s| *s == starts[0]), "{}", out.text);
+        assert!(starts[0] >= 52, "gutter overrun: {}", out.text);
+    }
+
+    #[test]
+    fn right_only_rows_share_the_aligned_column() {
+        // Columns whose baselines do not line up give one-sided rows; the
+        // right column's own rows must follow the same alignment as the
+        // rows it shares with the overrunning left column.
+        let mut items = Vec::new();
+        for r in 0..4 {
+            let y = 100.0 + 15.0 * r as f64;
+            let left = if r == 0 {
+                "x".repeat(50)
+            } else {
+                "y".repeat(40)
+            };
+            items.push(ti(&left, 10.0, y, 200.0, 10.0));
+            items.push(ti("paired right text", 230.0, y, 85.0, 10.0));
+        }
+        for r in 0..3 {
+            let y = 200.0 + 15.0 * r as f64;
+            items.push(ti("lonely right text", 230.0, y, 85.0, 10.0));
+        }
+        let page = PageInput {
+            page_num: 1,
+            width: 500.0,
+            height: 700.0,
+            text_items: items,
+        };
+        let out = project_page(page, false, false);
+        let starts: Vec<usize> = out
+            .text
+            .lines()
+            .filter_map(|l| l.find("right").map(|i| i - 6))
+            .collect();
+        assert_eq!(starts.len(), 7, "{}", out.text);
+        assert!(starts.iter().all(|s| *s == starts[0]), "{}", out.text);
+    }
+
+    #[test]
+    fn single_column_text_gets_no_gutter() {
+        let items: Vec<TextItem> = (0..5)
+            .map(|r| ti(&"w".repeat(60), 10.0, 100.0 + 15.0 * r as f64, 300.0, 10.0))
+            .collect();
+        let rows: Vec<Row> = (0..5).map(|i| vec![i]).collect();
+        assert!(find_gutters(&items, &rows, 5.0, 10.0).is_empty());
     }
 
     #[test]
