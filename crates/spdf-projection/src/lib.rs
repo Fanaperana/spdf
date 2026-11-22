@@ -500,7 +500,7 @@ fn filter_small_text_rows(rows: Vec<Row>, items: &[TextItem]) -> Vec<Row> {
 /// Rule: for each row, scan left-to-right. If item[k] has h <
 /// SMALL_FONT_SIZE_THRESHOLD and its horizontal gap to either neighbour is
 /// within one page-median-char-width, merge it into the chosen neighbour.
-fn absorb_small_glyphs(rows: &mut Vec<Row>, items: &mut Vec<TextItem>) {
+fn absorb_small_glyphs(rows: &mut [Row], items: &mut [TextItem]) {
     // Estimate an absorption gap budget from the (post-merge) items.
     let mut widths: Vec<f64> = items
         .iter()

@@ -266,9 +266,11 @@ fn run_parse(args: ParseArgs, quiet: bool) -> Result<()> {
     cfg.detect_tables = args.detect_tables;
     cfg.strip_running_text = args.strip_headers_footers;
     if args.trace_grid || args.visualize_grid.is_some() {
-        let mut debug = spdf_types::DebugConfig::default();
-        debug.enabled = true;
-        debug.trace = Some(args.trace_grid);
+        let mut debug = spdf_types::DebugConfig {
+            enabled: true,
+            trace: Some(args.trace_grid),
+            ..Default::default()
+        };
         if let Some(p) = &args.visualize_grid {
             debug.visualize = Some(true);
             debug.visualize_path = Some(p.to_string_lossy().into_owned());
@@ -363,10 +365,12 @@ fn run_parse_streaming(
 }
 
 fn run_screenshot(args: ScreenshotArgs, quiet: bool) -> Result<()> {
-    let mut cfg = spdf_types::ParseConfig::default();
-    cfg.dpi = args.dpi;
-    cfg.password = args.password;
-    cfg.target_pages = args.target_pages.clone();
+    let cfg = spdf_types::ParseConfig {
+        dpi: args.dpi,
+        password: args.password,
+        target_pages: args.target_pages.clone(),
+        ..Default::default()
+    };
     let parser = SpdfParser::new(cfg);
 
     let input = ParseInput::Path(PathBuf::from(&args.file));
@@ -424,13 +428,15 @@ fn run_batch(args: BatchArgs, quiet: bool) -> Result<()> {
             .unwrap_or_else(|| "output".into());
         let out_path = args.output_dir.join(format!("{stem}.{out_ext}"));
 
-        let mut cfg = spdf_types::ParseConfig::default();
-        cfg.output_format = output_format;
-        cfg.ocr_enabled = !args.no_ocr;
-        cfg.ocr_server_url = args.ocr_server_url.clone();
-        cfg.max_pages = args.max_pages;
-        cfg.dpi = args.dpi;
-        cfg.password = args.password.clone();
+        let mut cfg = spdf_types::ParseConfig {
+            output_format,
+            ocr_enabled: !args.no_ocr,
+            ocr_server_url: args.ocr_server_url.clone(),
+            max_pages: args.max_pages,
+            dpi: args.dpi,
+            password: args.password.clone(),
+            ..Default::default()
+        };
         if let Some(lang) = parse_language(&args.ocr_language) {
             cfg.ocr_language = lang;
         }

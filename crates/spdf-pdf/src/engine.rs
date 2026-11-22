@@ -47,11 +47,96 @@ pub trait PdfEngine: Send + Sync {
         options: ExtractOptions,
     ) -> SpdfResult<PageData>;
 
+    /// Extract several pages, in the order given. Engines that pay a
+    /// per-call cost to open the document should override this to pay it
+    /// once per batch.
+    fn extract_pages(
+        &self,
+        doc: &Self::Doc,
+        page_nums: &[u32],
+        options: ExtractOptions,
+    ) -> SpdfResult<Vec<PageData>> {
+        page_nums
+            .iter()
+            .map(|&n| self.extract_page(doc, n, options))
+            .collect()
+    }
+
     /// Render a page to a PNG byte buffer at the given DPI.
     fn render_page_png(&self, doc: &Self::Doc, page_num: u32, dpi: u32) -> SpdfResult<Vec<u8>>;
 
     fn close(&self, doc: Self::Doc) -> SpdfResult<()> {
         drop(doc);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Doc(u32);
+    impl PdfDocumentHandle for Doc {
+        fn num_pages(&self) -> u32 {
+            self.0
+        }
+    }
+
+    #[derive(Default)]
+    struct Counting {
+        calls: AtomicUsize,
+    }
+
+    impl PdfEngine for Counting {
+        type Doc = Doc;
+        fn name(&self) -> &'static str {
+            "counting"
+        }
+        fn load_bytes(&self, _: &[u8], _: Option<&str>) -> SpdfResult<Doc> {
+            Ok(Doc(3))
+        }
+        fn load_path(&self, _: &std::path::Path, _: Option<&str>) -> SpdfResult<Doc> {
+            Ok(Doc(3))
+        }
+        fn extract_page(&self, doc: &Doc, n: u32, _: ExtractOptions) -> SpdfResult<PageData> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if n == 0 || n > doc.0 {
+                return Err(spdf_types::SpdfError::InvalidInput("no such page".into()));
+            }
+            Ok(PageData {
+                page_num: n,
+                width: 1.0,
+                height: 1.0,
+                text_items: Vec::new(),
+                images: Vec::new(),
+                rulings: Vec::new(),
+            })
+        }
+        fn render_page_png(&self, _: &Doc, _: u32, _: u32) -> SpdfResult<Vec<u8>> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[test]
+    fn default_extract_pages_keeps_requested_order() {
+        let e = Counting::default();
+        let doc = e.load_bytes(&[], None).unwrap();
+        let pages = e
+            .extract_pages(&doc, &[3, 1, 2], ExtractOptions::default())
+            .unwrap();
+        let nums: Vec<u32> = pages.iter().map(|p| p.page_num).collect();
+        assert_eq!(nums, vec![3, 1, 2]);
+        assert_eq!(e.calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn default_extract_pages_propagates_errors() {
+        let e = Counting::default();
+        let doc = e.load_bytes(&[], None).unwrap();
+        assert!(
+            e.extract_pages(&doc, &[1, 9], ExtractOptions::default())
+                .is_err()
+        );
     }
 }

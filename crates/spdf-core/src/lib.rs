@@ -153,11 +153,8 @@ impl SpdfParser {
             extract_rulings: matches!(cfg.output_format, OutputFormat::Markdown),
         };
 
-        let pdf_engine = Arc::clone(&self.pdf_engine);
-        let mut page_datas: Vec<PageData> = page_numbers
-            .par_iter()
-            .map(|&page_num| pdf_engine.extract_page(&doc, page_num, opts))
-            .collect::<SpdfResult<Vec<_>>>()?;
+        let mut page_datas: Vec<PageData> =
+            self.pdf_engine.extract_pages(&doc, &page_numbers, opts)?;
         check_deadline("extract")?;
 
         // Phase 6: Selective OCR. Run on pages with sparse text or embedded

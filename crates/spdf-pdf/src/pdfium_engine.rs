@@ -254,162 +254,24 @@ impl PdfEngine for PdfiumEngine {
         page_num: u32,
         options: ExtractOptions,
     ) -> SpdfResult<PageData> {
+        self.with_doc(doc, |pdf| extract_loaded(pdf, doc, page_num, options))
+    }
+
+    /// Opens the document once for the whole batch: PDFium calls are
+    /// serialised on one global lock anyway, and re-parsing the file's
+    /// cross-reference table per page made extraction grow with
+    /// `pages x file size` on long documents.
+    fn extract_pages(
+        &self,
+        doc: &Self::Doc,
+        page_nums: &[u32],
+        options: ExtractOptions,
+    ) -> SpdfResult<Vec<PageData>> {
         self.with_doc(doc, |pdf| {
-            let page_idx: u16 = (page_num
-                .checked_sub(1)
-                .ok_or_else(|| SpdfError::InvalidInput("page numbers are 1-indexed".into()))?)
-                as u16;
-            let page = pdf
-                .pages()
-                .get(page_idx.into())
-                .map_err(|e| SpdfError::Pdf(format!("page {page_num}: {e:?}")))?;
-
-            let width = page.width().value as f64;
-            let height = page.height().value as f64;
-            // Positions come in user space; map them into the visible box.
-            let frame = page
-                .boundaries()
-                .bounding()
-                .ok()
-                .and_then(|b| {
-                    let r = b.bounds;
-                    crate::frame::PageFrame::new(
-                        r.left().value as f64,
-                        r.bottom().value as f64,
-                        r.right().value as f64,
-                        r.top().value as f64,
-                    )
-                })
-                .unwrap_or_else(|| crate::frame::PageFrame::origin(width, height));
-
-            let text_page = page
-                .text()
-                .map_err(|e| SpdfError::Pdf(format!("page {page_num} text: {e:?}")))?;
-
-            let mut items: Vec<TextItem> = Vec::new();
-            let all_segments = text_page.segments();
-            let segments: Vec<_> = all_segments.iter().collect();
-            // Exact per-segment text from the page's characters; PDFium's
-            // rectangle query re-reads overlapping neighbours' glyphs.
-            let exact = segment_texts(&text_page, &segments);
-            for (si, segment) in segments.iter().enumerate() {
-                let rect = segment.bounds();
-                let seg_exact = exact.as_ref().map(|e| &e[si]);
-                let str_content = match seg_exact {
-                    Some(e) => e.text.clone(),
-                    None => segment.text(),
-                };
-                if str_content.is_empty() {
-                    continue;
-                }
-                // PDFium gives points with bottom-left origin; flip Y to match
-                // liteparse's top-left convention.
-                let top = rect.top().value as f64;
-                let bottom = rect.bottom().value as f64;
-                let left = rect.left().value as f64;
-                let right = rect.right().value as f64;
-                let y_top = frame.y(top);
-                let item_h = top - bottom;
-                let item_w = right - left;
-                let mut ti =
-                    TextItem::new(str_content, left, y_top, item_w.max(0.0), item_h.max(0.0));
-                // Prefer the real font size / name from the segment's first
-                // visible glyph: the bbox height depends on which glyphs the
-                // run contains (x-height vs. ascenders), which makes it a
-                // noisy signal for heading detection.
-                let (font_size, font_name) = segment_font(segment);
-                let size = font_size.unwrap_or(item_h).max(1.0);
-                ti.font_size = Some(size);
-                ti.font_name = font_name;
-                // Table rows drawn as one run come back as one segment;
-                // cut it at column gutters so cells stay apart.
-                if crate::gutter::suspicious(&ti.str, item_w, size) {
-                    let pieces = match seg_exact {
-                        Some(e) => crate::gutter::split(&ti.str, &e.glyphs, size),
-                        None => segment_gutters(segment, &ti.str, size),
-                    };
-                    if let Some(pieces) = pieces {
-                        for p in pieces {
-                            let mut part =
-                                TextItem::new(p.text, p.left, y_top, p.right - p.left, ti.height);
-                            part.font_size = ti.font_size;
-                            part.font_name = ti.font_name.clone();
-                            items.push(part);
-                        }
-                        continue;
-                    }
-                }
-                items.push(ti);
-            }
-
-            // Composite fonts without a ToUnicode CMap come out as raw
-            // character codes; recover their text from the embedded font.
-            let mut rebuild = None;
-            if items
+            page_nums
                 .iter()
-                .any(|it| crate::cidfont::looks_like_raw_codes(&it.str))
-            {
-                let maps = doc
-                    .font_maps
-                    .get_or_init(|| crate::cidfont::recover_font_maps(&doc.bytes));
-                if !maps.is_empty() {
-                    rebuild = Some(maps);
-                }
-            }
-
-            // Rectangle-based segments duplicate overlapping glyphs and keep
-            // RTL scripts in visual order; rebuild such pages from glyphs.
-            if rebuild.is_some() || items.iter().any(|it| crate::rtl::has_rtl(&it.str)) {
-                let runs = crate::rtl::build_runs(page_glyphs(&text_page, &frame, rebuild));
-                if !runs.is_empty() {
-                    items = runs
-                        .into_iter()
-                        .map(|r| {
-                            let mut ti = TextItem::new(r.text, r.x, r.y, r.width, r.height);
-                            ti.font_size = Some(r.font_size.max(1.0));
-                            ti.font_name = r.font_name;
-                            ti
-                        })
-                        .collect();
-                }
-            }
-
-            // Values typed into interactive form fields live in widget
-            // annotations, not the content stream.
-            let mut form_items = Vec::new();
-            for field in form_widgets(&page, &frame) {
-                form_items.extend(crate::form::field_items(&field, &items));
-            }
-            items.extend(form_items);
-            frame.shift_items(&mut items);
-            // Text drawn entirely outside the visible box (the other half of
-            // a spread, bleed-area slugs) is never displayed.
-            items.retain(|it| frame.shows(it));
-
-            let images = if options.extract_images {
-                let mut images = extract_images(&page, &frame);
-                frame.shift_images(&mut images);
-                images
-            } else {
-                Vec::new()
-            };
-
-            let rulings = if options.extract_rulings {
-                let mut rulings = extract_rulings(&page, &frame);
-                frame.shift_rulings(&mut rulings);
-                rulings
-            } else {
-                Vec::new()
-            };
-
-            Ok(PageData {
-                page_num,
-                width,
-                height,
-                text_items: items,
-                images,
-                rulings,
-            })
+                .map(|&n| extract_loaded(pdf, doc, n, options))
+                .collect()
         })
     }
 
@@ -441,6 +303,169 @@ impl PdfEngine for PdfiumEngine {
             Ok(buf)
         })
     }
+}
+
+/// Extract one page from an already opened document.
+fn extract_loaded(
+    pdf: &pdfium_render::prelude::PdfDocument<'_>,
+    doc: &PdfiumDoc,
+    page_num: u32,
+    options: ExtractOptions,
+) -> SpdfResult<PageData> {
+    let page_idx: u16 = (page_num
+        .checked_sub(1)
+        .ok_or_else(|| SpdfError::InvalidInput("page numbers are 1-indexed".into()))?)
+        as u16;
+    let page = pdf
+        .pages()
+        .get(page_idx.into())
+        .map_err(|e| SpdfError::Pdf(format!("page {page_num}: {e:?}")))?;
+
+    let width = page.width().value as f64;
+    let height = page.height().value as f64;
+    // Positions come in user space; map them into the visible box.
+    let frame = page
+        .boundaries()
+        .bounding()
+        .ok()
+        .and_then(|b| {
+            let r = b.bounds;
+            crate::frame::PageFrame::new(
+                r.left().value as f64,
+                r.bottom().value as f64,
+                r.right().value as f64,
+                r.top().value as f64,
+            )
+        })
+        .unwrap_or_else(|| crate::frame::PageFrame::origin(width, height));
+
+    let text_page = page
+        .text()
+        .map_err(|e| SpdfError::Pdf(format!("page {page_num} text: {e:?}")))?;
+
+    let mut items: Vec<TextItem> = Vec::new();
+    let all_segments = text_page.segments();
+    let segments: Vec<_> = all_segments.iter().collect();
+    // Exact per-segment text from the page's characters; PDFium's
+    // rectangle query re-reads overlapping neighbours' glyphs.
+    let exact = segment_texts(&text_page, &segments);
+    for (si, segment) in segments.iter().enumerate() {
+        let rect = segment.bounds();
+        let seg_exact = exact.as_ref().map(|e| &e[si]);
+        let str_content = match seg_exact {
+            Some(e) => e.text.clone(),
+            None => segment.text(),
+        };
+        if str_content.is_empty() {
+            continue;
+        }
+        // PDFium gives points with bottom-left origin; flip Y to match
+        // liteparse's top-left convention.
+        let top = rect.top().value as f64;
+        let bottom = rect.bottom().value as f64;
+        let left = rect.left().value as f64;
+        let right = rect.right().value as f64;
+        let y_top = frame.y(top);
+        let item_h = top - bottom;
+        let item_w = right - left;
+        let mut ti = TextItem::new(str_content, left, y_top, item_w.max(0.0), item_h.max(0.0));
+        // Prefer the real font size / name from the segment's first
+        // visible glyph: the bbox height depends on which glyphs the
+        // run contains (x-height vs. ascenders), which makes it a
+        // noisy signal for heading detection.
+        let (font_size, font_name) = segment_font(segment);
+        let size = font_size.unwrap_or(item_h).max(1.0);
+        ti.font_size = Some(size);
+        ti.font_name = font_name;
+        // Table rows drawn as one run come back as one segment;
+        // cut it at column gutters so cells stay apart.
+        if crate::gutter::suspicious(&ti.str, item_w, size) {
+            let pieces = match seg_exact {
+                Some(e) => crate::gutter::split(&ti.str, &e.glyphs, size),
+                None => segment_gutters(segment, &ti.str, size),
+            };
+            if let Some(pieces) = pieces {
+                for p in pieces {
+                    let mut part =
+                        TextItem::new(p.text, p.left, y_top, p.right - p.left, ti.height);
+                    part.font_size = ti.font_size;
+                    part.font_name = ti.font_name.clone();
+                    items.push(part);
+                }
+                continue;
+            }
+        }
+        items.push(ti);
+    }
+
+    // Composite fonts without a ToUnicode CMap come out as raw
+    // character codes; recover their text from the embedded font.
+    let mut rebuild = None;
+    if items
+        .iter()
+        .any(|it| crate::cidfont::looks_like_raw_codes(&it.str))
+    {
+        let maps = doc
+            .font_maps
+            .get_or_init(|| crate::cidfont::recover_font_maps(&doc.bytes));
+        if !maps.is_empty() {
+            rebuild = Some(maps);
+        }
+    }
+
+    // Rectangle-based segments duplicate overlapping glyphs and keep
+    // RTL scripts in visual order; rebuild such pages from glyphs.
+    if rebuild.is_some() || items.iter().any(|it| crate::rtl::has_rtl(&it.str)) {
+        let runs = crate::rtl::build_runs(page_glyphs(&text_page, &frame, rebuild));
+        if !runs.is_empty() {
+            items = runs
+                .into_iter()
+                .map(|r| {
+                    let mut ti = TextItem::new(r.text, r.x, r.y, r.width, r.height);
+                    ti.font_size = Some(r.font_size.max(1.0));
+                    ti.font_name = r.font_name;
+                    ti
+                })
+                .collect();
+        }
+    }
+
+    // Values typed into interactive form fields live in widget
+    // annotations, not the content stream.
+    let mut form_items = Vec::new();
+    for field in form_widgets(&page, &frame) {
+        form_items.extend(crate::form::field_items(&field, &items));
+    }
+    items.extend(form_items);
+    frame.shift_items(&mut items);
+    // Text drawn entirely outside the visible box (the other half of
+    // a spread, bleed-area slugs) is never displayed.
+    items.retain(|it| frame.shows(it));
+
+    let images = if options.extract_images {
+        let mut images = extract_images(&page, &frame);
+        frame.shift_images(&mut images);
+        images
+    } else {
+        Vec::new()
+    };
+
+    let rulings = if options.extract_rulings {
+        let mut rulings = extract_rulings(&page, &frame);
+        frame.shift_rulings(&mut rulings);
+        rulings
+    } else {
+        Vec::new()
+    };
+
+    Ok(PageData {
+        page_num,
+        width,
+        height,
+        text_items: items,
+        images,
+        rulings,
+    })
 }
 
 /// Upper bound on rules collected per page: vector-art pages can hold
