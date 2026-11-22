@@ -31,7 +31,11 @@ serde_json.workspace = true
 libc = "0.2"
 
 [features]
-default = []
+default = ["neural-ocr"]
+# Built-in GPU neural OCR for scanned pages (no system install needed).
+neural-ocr = ["spdf-core/neural-ocr"]
+# Also allow SPDF_OCR_DEVICE=cuda for the neural OCR engine.
+neural-ocr-cuda = ["spdf-core/neural-ocr-cuda"]
 # Enable Tesseract-backed local OCR. Requires system libtesseract +
 # libleptonica (e.g. `apt install libtesseract-dev libleptonica-dev`).
 tesseract = ["spdf-core/tesseract"]

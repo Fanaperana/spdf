@@ -11,7 +11,7 @@ categories.workspace = true
 readme.workspace = true
 homepage.workspace = true
 documentation.workspace = true
-description = "OCR engine trait + HTTP and Tesseract implementations."
+description = "OCR engine trait + built-in neural (Burn), HTTP and Tesseract implementations."
 
 [dependencies]
 spdf-types.workspace = true
@@ -21,8 +21,22 @@ serde_json.workspace = true
 reqwest = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 tesseract = { workspace = true, optional = true }
+burn = { version = "0.22", default-features = false, features = ["std", "wgpu", "flex"], optional = true }
+burn-store = { version = "0.22", optional = true }
+image = { workspace = true, optional = true }
+
+[build-dependencies]
+burn-onnx = { version = "0.22", optional = true }
+ureq = { version = "2.12", features = ["tls"], optional = true }
+sha2 = { version = "0.10", optional = true }
 
 [features]
 default = ["http"]
 http = ["dep:reqwest", "dep:tokio"]
 tesseract = ["dep:tesseract"]
+# Built-in neural OCR (PP-OCRv5 det + rec compiled to Burn, GPU via wgpu with
+# CPU fallback). Model weights are fetched + SHA-256-verified at build time
+# and embedded in the binary.
+neural = ["dep:burn", "dep:burn-store", "dep:image", "dep:burn-onnx", "dep:ureq", "dep:sha2"]
+# Additionally allow `SPDF_OCR_DEVICE=cuda` (needs the CUDA driver).
+neural-cuda = ["neural", "burn/cuda"]

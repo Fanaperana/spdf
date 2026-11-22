@@ -292,9 +292,7 @@ impl SpdfParser {
         // parallel without borrowing `pages` mutably.
         let mut todo: Vec<(usize, u32)> = Vec::new();
         for (idx, page) in pages.iter().enumerate() {
-            let text_length: usize = page.text_items.iter().map(|t| t.str.len()).sum();
-            let needs_full_ocr = text_length < 100 || !page.images.is_empty();
-            if needs_full_ocr {
+            if page_needs_ocr(page) {
                 todo.push((idx, page.page_num));
             }
         }
@@ -824,11 +822,30 @@ fn build_ocr_engine(config: &ParseConfig) -> Option<Arc<dyn OcrEngine>> {
             config.tessdata_path.clone(),
         )));
     }
-    #[cfg(not(feature = "tesseract"))]
+    #[cfg(all(feature = "neural-ocr", not(feature = "tesseract")))]
+    {
+        // Construction is free: models and GPU load on the first OCR page.
+        if spdf_ocr::NeuralOcrEngine::models_available() {
+            return Some(Arc::new(spdf_ocr::NeuralOcrEngine::new()));
+        }
+    }
+    #[allow(unreachable_code)]
     {
         let _ = config;
         None
     }
+}
+
+/// A page is OCR'd only when it carries raster content and its text layer
+/// is unusable: (nearly) empty, as on scans, or broken CID garbage. Born-
+/// digital pages with a real text layer never pay for OCR, even when they
+/// embed images such as logos or figures.
+fn page_needs_ocr(page: &PageData) -> bool {
+    if page.images.is_empty() {
+        return false;
+    }
+    let text_length: usize = page.text_items.iter().map(|t| t.str.trim().len()).sum();
+    text_length < 100 || is_cid_garbage_layer(&page.text_items)
 }
 
 /// Emit a one-shot warning when OCR is requested but no engine is available,
@@ -1138,6 +1155,51 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ocr_page(text: &str, images: usize) -> PageData {
+        PageData {
+            page_num: 1,
+            width: 612.0,
+            height: 792.0,
+            text_items: if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![TextItem::new(text, 72.0, 72.0, 400.0, 10.0)]
+            },
+            images: (0..images)
+                .map(|_| spdf_types::Image {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 612.0,
+                    height: 792.0,
+                    data: None,
+                    scale_factor: None,
+                    original_orientation_angle: None,
+                    image_type: None,
+                })
+                .collect(),
+            rulings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn ocr_runs_only_on_image_pages_without_usable_text() {
+        let long = "Born-digital paragraph text. ".repeat(10);
+        // Scan: image, no text layer.
+        assert!(page_needs_ocr(&ocr_page("", 1)));
+        // Scan with a stray header string.
+        assert!(page_needs_ocr(&ocr_page("Page 3", 1)));
+        // Born-digital page with a logo: keep the fast path.
+        assert!(!page_needs_ocr(&ocr_page(&long, 1)));
+        // Empty page without raster content: nothing to recognise.
+        assert!(!page_needs_ocr(&ocr_page("", 0)));
+        // Unusable CID-garbage layer over an image is OCR'd.
+        let mut garbage = ocr_page("", 1);
+        garbage.text_items = (0..60)
+            .map(|i| TextItem::new(["fi", "ff", "fl"][i % 3], 72.0, 72.0 + i as f64, 8.0, 10.0))
+            .collect();
+        assert!(page_needs_ocr(&garbage));
+    }
 
     fn page_with(lines: &[(&str, f64)]) -> ParsedPage {
         let items: Vec<TextItem> = lines

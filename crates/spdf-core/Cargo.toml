@@ -30,3 +30,7 @@ flate2.workspace = true
 [features]
 default = []
 tesseract = ["spdf-ocr/tesseract"]
+# Built-in neural OCR (PP-OCRv5 on Burn: GPU via wgpu, CPU fallback). Used
+# for scanned / image-only pages when no OCR server URL is configured.
+neural-ocr = ["spdf-ocr/neural"]
+neural-ocr-cuda = ["neural-ocr", "spdf-ocr/neural-cuda"]
