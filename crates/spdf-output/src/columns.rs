@@ -15,6 +15,15 @@ const MIN_GUTTER: usize = 2;
 const MIN_PAIRED_LINES: usize = 4;
 /// Average non-space characters per line a prose column must reach.
 const MIN_AVG_CHARS: f64 = 15.0;
+/// Average non-space characters per line for a narrow column (sidebar,
+/// margin note) whose lines visibly wrap running sentences.
+const MIN_NARROW_AVG_CHARS: f64 = 8.0;
+/// Fewest text lines a narrow column needs before its wrapping is trusted.
+const MIN_NARROW_LINES: usize = 8;
+/// Share of a narrow column's continuation lines that must start lower case.
+const MIN_LOWER_START_SHARE: f64 = 0.6;
+/// Share of a narrow column's lines that must hold two or more words.
+const MIN_MULTIWORD_SHARE: f64 = 0.7;
 /// Largest share of a column's lines that may contain a wide internal gap.
 const MAX_GAPPY_SHARE: f64 = 0.25;
 /// An internal run of this many spaces marks a line as "gappy" (tabular).
@@ -128,9 +137,39 @@ fn is_prose(side: &[Line]) -> bool {
         .iter()
         .filter(|l| extent(l) as f64 >= width * FULL_LINE_RATIO)
         .count();
-    chars as f64 / n >= MIN_AVG_CHARS
+    let avg = chars as f64 / n;
+    (avg >= MIN_AVG_CHARS || (avg >= MIN_NARROW_AVG_CHARS && wraps_sentences(&lines)))
         && gappy as f64 <= n * MAX_GAPPY_SHARE
         && full as f64 >= n * MIN_FULL_SHARE
+}
+
+/// Does a narrow side read as running sentences wrapped over many lines?
+/// A sidebar or margin note set in a narrow measure has short lines, but
+/// most of them continue the previous line's sentence and so start in
+/// lower case; table cells and labels start each row afresh (capitalised
+/// or numeric).
+fn wraps_sentences(lines: &[&Line]) -> bool {
+    if lines.len() < MIN_NARROW_LINES {
+        return false;
+    }
+    let multiword = lines
+        .iter()
+        .filter(|l| {
+            let s: String = l.iter().collect();
+            s.split_whitespace().count() >= 2
+        })
+        .count();
+    let lower = lines
+        .iter()
+        .skip(1)
+        .filter(|l| {
+            l.iter()
+                .find(|c| !c.is_whitespace())
+                .is_some_and(|c| c.is_lowercase())
+        })
+        .count();
+    lower as f64 >= (lines.len() - 1) as f64 * MIN_LOWER_START_SHARE
+        && multiword as f64 >= lines.len() as f64 * MIN_MULTIWORD_SHARE
 }
 
 /// Holes inside `side` (between its first and last text line): maximal runs
@@ -469,6 +508,54 @@ sustainability
 {row}
 {row}"
         );
+        assert_eq!(reflow_columns(&text), text);
+    }
+
+    #[test]
+    fn narrow_sidebar_beside_body_is_read_first() {
+        let side = [
+            "In this",
+            "context, we are",
+            "talking about",
+            "fact-checking",
+            "that is done",
+            "before a source",
+            "is published.",
+            "Over the last",
+            "two decades",
+            "there has been",
+            "an increase in",
+            "fact checking.",
+        ];
+        let mut text = String::new();
+        for (i, s) in side.iter().enumerate() {
+            text.push_str(&format!(
+                "    {s:<20}    body column sentence number {i:02} goes on here
+"
+            ));
+        }
+        let out = reflow_columns(text.trim_end());
+        let lines: Vec<&str> = out.lines().map(str::trim).collect();
+        assert_eq!(lines[0], "In this");
+        assert_eq!(lines[11], "fact checking.");
+        assert_eq!(lines[12], "body column sentence number 00 goes on here");
+    }
+
+    #[test]
+    fn narrow_label_column_is_not_a_sidebar() {
+        // Short capitalised labels beside values: a key/value layout.
+        let labels = [
+            "Name", "Address", "Phone", "Email", "Company", "Country", "Region", "Postcode",
+            "Website", "Contact",
+        ];
+        let mut text = String::new();
+        for (i, l) in labels.iter().enumerate() {
+            text.push_str(&format!(
+                "{l:<12}    value text for the field number {i:02} goes here
+"
+            ));
+        }
+        let text = text.trim_end().to_string();
         assert_eq!(reflow_columns(&text), text);
     }
 }

@@ -443,6 +443,17 @@ fn plausible_heading(text: &str) -> bool {
     !is_caption(text) && !is_run_in(text) && !is_date_line(text) && sized_like_heading(text)
 }
 
+/// Whether a line carries a web address. Footnotes, source credits and
+/// contact lines cite URLs; section headings do not.
+fn has_url(text: &str) -> bool {
+    let t = text.to_lowercase();
+    t.contains("://")
+        || t.split_whitespace().any(|w| {
+            w.trim_start_matches(['(', '<', '"', '“'])
+                .starts_with("www.")
+        })
+}
+
 /// Whether a word names a calendar month (`June`, `Sept.`, `oct`).
 fn is_month(w: &str) -> bool {
     const MONTHS: [&str; 12] = [
@@ -661,6 +672,9 @@ pub fn page_to_markdown(page: &ParsedPage, style: &DocStyle) -> String {
         };
         let mut level = styled.filter(|lv| {
             plausible_heading(candidate)
+                // A URL rules out a new heading; on a continuation line it
+                // is handled below by demoting the open heading.
+                && (open == Some(*lv) || !has_url(candidate))
                 && !(is_toc_entry(raw) && has_dot_leader(raw))
                 && !inside_toc(&lines, idx - 1)
                 // A wrapped heading may continue in lowercase.
@@ -681,6 +695,18 @@ pub fn page_to_markdown(page: &ParsedPage, style: &DocStyle) -> String {
             _ => None,
         };
         match level {
+            Some(lv) if open == Some(lv) && has_url(&text) => {
+                // A heading-styled block that runs on into a URL is a
+                // footnote or source credit set large, not a heading: give
+                // its opening line back to the body.
+                if let Some(last) = out.last_mut() {
+                    *last = last.trim_start_matches('#').trim_start().to_string();
+                }
+                open = None;
+                suppressed = Some(lv);
+                prev_body = Some(line);
+                out.push(line.to_string());
+            }
             Some(lv) if open == Some(lv) => {
                 // Continuation of a heading wrapped over several lines.
                 let last = out.last_mut().expect("open heading has a line");
@@ -1179,5 +1205,41 @@ across all sectors (%)
         assert!(ends_sentence("violence towards women.”"));
         assert!(ends_sentence("a Challenger).2"));
         assert!(!ends_sentence("Business Models"));
+    }
+
+    #[test]
+    fn heading_styled_footnote_with_url_is_body() {
+        let mut items = body_items(8, 40.0);
+        items.push(item(
+            "2. Content in this section is adapted from the",
+            50.0,
+            200.0,
+            14.0,
+            "Times",
+        ));
+        items.push(item(
+            "entry (https://en.wikipedia.org/wiki/",
+            50.0,
+            216.0,
+            14.0,
+            "Times",
+        ));
+        let p = page(
+            "body text line with words
+
+2. Content in this section is adapted from the
+entry (https://en.wikipedia.org/wiki/",
+            items,
+        );
+        let md = page_to_markdown(&p, &DocStyle::from_pages([&p]));
+        assert!(!md.contains('#'), "{md}");
+        assert!(md.contains("2. Content in this section"), "{md}");
+    }
+
+    #[test]
+    fn url_predicate() {
+        assert!(has_url("see https://example.org/x"));
+        assert!(has_url("Visit www.example.com today"));
+        assert!(!has_url("Results and Discussion"));
     }
 }
