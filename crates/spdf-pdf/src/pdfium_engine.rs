@@ -266,6 +266,21 @@ impl PdfEngine for PdfiumEngine {
 
             let width = page.width().value as f64;
             let height = page.height().value as f64;
+            // Positions come in user space; map them into the visible box.
+            let frame = page
+                .boundaries()
+                .bounding()
+                .ok()
+                .and_then(|b| {
+                    let r = b.bounds;
+                    crate::frame::PageFrame::new(
+                        r.left().value as f64,
+                        r.bottom().value as f64,
+                        r.right().value as f64,
+                        r.top().value as f64,
+                    )
+                })
+                .unwrap_or_else(|| crate::frame::PageFrame::origin(width, height));
 
             let text_page = page
                 .text()
@@ -293,7 +308,7 @@ impl PdfEngine for PdfiumEngine {
                 let bottom = rect.bottom().value as f64;
                 let left = rect.left().value as f64;
                 let right = rect.right().value as f64;
-                let y_top = height - top;
+                let y_top = frame.y(top);
                 let item_h = top - bottom;
                 let item_w = right - left;
                 let mut ti =
@@ -345,7 +360,7 @@ impl PdfEngine for PdfiumEngine {
             // Rectangle-based segments duplicate overlapping glyphs and keep
             // RTL scripts in visual order; rebuild such pages from glyphs.
             if rebuild.is_some() || items.iter().any(|it| crate::rtl::has_rtl(&it.str)) {
-                let runs = crate::rtl::build_runs(page_glyphs(&text_page, height, rebuild));
+                let runs = crate::rtl::build_runs(page_glyphs(&text_page, &frame, rebuild));
                 if !runs.is_empty() {
                     items = runs
                         .into_iter()
@@ -362,19 +377,27 @@ impl PdfEngine for PdfiumEngine {
             // Values typed into interactive form fields live in widget
             // annotations, not the content stream.
             let mut form_items = Vec::new();
-            for field in form_widgets(&page, height) {
+            for field in form_widgets(&page, &frame) {
                 form_items.extend(crate::form::field_items(&field, &items));
             }
             items.extend(form_items);
+            frame.shift_items(&mut items);
+            // Text drawn entirely outside the visible box (the other half of
+            // a spread, bleed-area slugs) is never displayed.
+            items.retain(|it| frame.shows(it));
 
             let images = if options.extract_images {
-                extract_images(&page, height)
+                let mut images = extract_images(&page, &frame);
+                frame.shift_images(&mut images);
+                images
             } else {
                 Vec::new()
             };
 
             let rulings = if options.extract_rulings {
-                extract_rulings(&page, height)
+                let mut rulings = extract_rulings(&page, &frame);
+                frame.shift_rulings(&mut rulings);
+                rulings
             } else {
                 Vec::new()
             };
@@ -430,7 +453,10 @@ const MAX_RULE_THICKNESS: f64 = 3.0;
 /// paths: stroked lines and shapes, and thin filled rectangles (a common
 /// way to draw table rules).
 /// Coordinates are flipped to a top-left origin.
-fn extract_rulings(page: &pdfium_render::prelude::PdfPage<'_>, page_height: f64) -> Vec<Ruling> {
+fn extract_rulings(
+    page: &pdfium_render::prelude::PdfPage<'_>,
+    frame: &crate::frame::PageFrame,
+) -> Vec<Ruling> {
     use pdfium_render::prelude::{
         PdfPageObjectCommon, PdfPathFillMode, PdfPathSegmentType, PdfPathSegments,
     };
@@ -470,7 +496,7 @@ fn extract_rulings(page: &pdfium_render::prelude::PdfPage<'_>, page_height: f64)
         let mut cur: Option<(f64, f64)> = None;
         for seg in segments.iter() {
             let (x, y) = seg.point();
-            let p = (x.value as f64, page_height - y.value as f64);
+            let p = (x.value as f64, frame.y(y.value as f64));
             lo_x = lo_x.min(p.0);
             hi_x = hi_x.max(p.0);
             lo_y = lo_y.min(p.1);
@@ -538,7 +564,10 @@ fn push_ruling(out: &mut Vec<Ruling>, a: (f64, f64), b: (f64, f64)) {
 /// and attempt to decode the raw pixel buffer to PNG via the `image` crate.
 /// Decode failures are non-fatal: the image entry is still emitted with
 /// `data = None` so downstream OCR can re-render the region from the page.
-fn extract_images(page: &pdfium_render::prelude::PdfPage<'_>, page_height: f64) -> Vec<Image> {
+fn extract_images(
+    page: &pdfium_render::prelude::PdfPage<'_>,
+    frame: &crate::frame::PageFrame,
+) -> Vec<Image> {
     use pdfium_render::prelude::PdfPageObjectCommon;
     let mut out = Vec::new();
     for object in page.objects().iter() {
@@ -562,7 +591,7 @@ fn extract_images(page: &pdfium_render::prelude::PdfPage<'_>, page_height: f64) 
 
         out.push(Image {
             x: left,
-            y: page_height - top,
+            y: frame.y(top),
             width: w,
             height: h,
             data: png_bytes,
@@ -598,7 +627,7 @@ fn encode_image_object_to_png(
 /// carry a value, in top-left coordinates.
 fn form_widgets(
     page: &pdfium_render::prelude::PdfPage<'_>,
-    page_height: f64,
+    frame: &crate::frame::PageFrame,
 ) -> Vec<crate::form::FieldWidget> {
     use pdfium_render::prelude::{PdfFormField, PdfPageAnnotationCommon};
     let mut out = Vec::new();
@@ -627,7 +656,7 @@ fn form_widgets(
         let right = rect.right().value as f64;
         out.push(crate::form::FieldWidget {
             left: left.min(right),
-            top: page_height - top.max(bottom),
+            top: frame.y(top.max(bottom)),
             width: (right - left).abs(),
             height: (top - bottom).abs(),
             value,
@@ -643,7 +672,7 @@ fn form_widgets(
 /// take their text from it (PDFium reports such characters as raw codes).
 fn page_glyphs(
     text_page: &pdfium_render::prelude::PdfPageText<'_>,
-    page_height: f64,
+    frame: &crate::frame::PageFrame,
     font_maps: Option<&crate::cidfont::FontMaps>,
 ) -> Vec<crate::rtl::Glyph> {
     let mut out = Vec::new();
@@ -685,15 +714,15 @@ fn page_glyphs(
         };
         let baseline = ch
             .origin_y()
-            .map(|y| page_height - y.value as f64)
-            .unwrap_or(page_height - bottom);
+            .map(|y| frame.y(y.value as f64))
+            .unwrap_or(frame.y(bottom));
         let name = ch.font_name();
         out.push(crate::rtl::Glyph {
             text,
             left: rect.left().value as f64,
             right: rect.right().value as f64,
-            top: page_height - top,
-            bottom: page_height - bottom,
+            top: frame.y(top),
+            bottom: frame.y(bottom),
             baseline,
             font_size: size,
             font_name: (!name.is_empty()).then_some(name),
