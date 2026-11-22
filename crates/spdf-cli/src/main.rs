@@ -13,6 +13,24 @@ use spdf_core::{OutputFormat, SpdfParser};
 use spdf_types::{Language, ParseInput};
 use tracing_subscriber::{EnvFilter, fmt};
 
+/// OCR inference allocates and frees many multi-megabyte activation
+/// tensors per page. The system allocator hands each of those straight back
+/// to the OS, so the next one page-faults fresh zeroed memory; mimalloc
+/// keeps recently freed segments for reuse.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+/// `mi_option_purge_delay` in mimalloc v3 (`libmimalloc-sys`' default).
+const MI_OPTION_PURGE_DELAY: libmimalloc_sys::mi_option_t = 15;
+
+/// Return freed memory to the OS after 1 ms instead of mimalloc's default
+/// 10 ms: OCR frees large activations in quick succession, and the longer
+/// delay lets them pile up into a higher peak RSS for no extra reuse.
+fn tune_allocator() {
+    // SAFETY: sets a plain integer option; valid at any time.
+    unsafe { libmimalloc_sys::mi_option_set(MI_OPTION_PURGE_DELAY, 1) };
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "spdf", version, about = "Fast PDF parsing and OCR")]
 struct Cli {
@@ -192,6 +210,7 @@ impl From<CliFormat> for OutputFormat {
 }
 
 fn main() {
+    tune_allocator();
     let cli = Cli::parse();
     // `-v` levels override RUST_LOG; otherwise respect the env.
     let filter = match cli.verbose {

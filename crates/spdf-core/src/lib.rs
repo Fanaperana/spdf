@@ -299,6 +299,7 @@ impl SpdfParser {
         if todo.is_empty() {
             return Ok(());
         }
+        ocr.prepare(todo.len());
 
         // Phase 2: render + OCR in parallel. `pdf_engine.render_page_png` is
         // `&self` and internally serialises on PDFium's global mutex; that's

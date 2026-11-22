@@ -14,7 +14,7 @@ Keep it short; expand per-crate READMEs for the gory details.
 | `spdf-processing` | Pure text/geometry helpers: bbox, clean, markup, search, ocr-utils. |
 | `spdf-projection` | Spatial grid reconstruction (the crown jewel). |
 | `spdf-pdf` | `PdfEngine` trait + PDFium implementation (text + render + images). |
-| `spdf-ocr` | `OcrEngine` trait + built-in neural OCR (PP-OCRv5 on Burn, GPU via wgpu, CPU fallback; feature `neural`) + HTTP + Tesseract. |
+| `spdf-ocr` | `OcrEngine` trait + built-in neural OCR (PP-OCRv5 on Burn: CPU for short jobs, GPU via wgpu for 8+ pages; conv-folded at build time; feature `neural`) + HTTP + Tesseract. |
 | `spdf-convert` | Shell out to LibreOffice / ImageMagick for non-PDF inputs. |
 | `spdf-output` | JSON + text formatters. |
 | `spdf-core` | `SpdfParser` orchestrator: load → extract → OCR → project → format. |
@@ -46,7 +46,7 @@ READMEs for the gory details.
 | `spdf-processing` | Pure text/geometry helpers: bbox, clean, markup, search, ocr-utils. | `liteparse/src/processing/*` (minus grid) |
 | `spdf-projection` | Spatial grid reconstruction (the crown jewel). | `liteparse/src/processing/gridProjection.ts`, `grid.ts` |
 | `spdf-pdf` | `PdfEngine` trait + PDFium implementation (text + render + images). | `liteparse/src/engines/pdf/*` |
-| `spdf-ocr` | `OcrEngine` trait + built-in neural OCR (PP-OCRv5 on Burn, GPU via wgpu, CPU fallback; feature `neural`) + HTTP + Tesseract. | `liteparse/src/engines/ocr/*` |
+| `spdf-ocr` | `OcrEngine` trait + built-in neural OCR (PP-OCRv5 on Burn: CPU for short jobs, GPU via wgpu for 8+ pages; conv-folded at build time; feature `neural`) + HTTP + Tesseract. | `liteparse/src/engines/ocr/*` |
 | `spdf-convert` | Shell out to LibreOffice / ImageMagick for non-PDF inputs. | `liteparse/src/conversion/convertToPdf.ts` |
 | `spdf-output` | JSON + text formatters. | `liteparse/src/output/*` |
 | `spdf-core` | `SpdfParser` orchestrator: load → extract → OCR → project → format. | `liteparse/src/core/parser.ts` |

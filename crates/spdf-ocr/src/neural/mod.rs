@@ -13,11 +13,20 @@
 //!    frame, so rotated and skewed scans feed the layout projection like
 //!    straight text.
 //!
+//! Backend choice: a GPU pays a fixed start-up cost per process (adapter and
+//! device creation, kernel compilation: 0.4-1 s) and a few hundred MB of
+//! driver memory, which only pays off on long jobs. Documents with fewer
+//! than [`GPU_MIN_PAGES`] pages to OCR therefore run on the CPU; longer ones
+//! use a wgpu adapter when one works.
+//!
 //! Environment:
 //! - `SPDF_OCR_DEVICE=cpu|wgpu|cuda` forces a backend (`cuda` needs the
 //!   `neural-cuda` feature).
+//! - `SPDF_OCR_THREADS=N` sets the CPU backend's thread count.
 
 pub mod ctc;
+#[cfg(test)]
+mod fold;
 pub mod geom;
 
 use std::sync::{Mutex, OnceLock};
@@ -52,24 +61,49 @@ mod rec_latin_model {
     ));
 }
 
+/// Upper bound on CPU inference threads by default; beyond this the
+/// small OCR tensors stop scaling.
+const MAX_CPU_THREADS: usize = 16;
 /// Recogniser input height for PP-OCRv5.
 const REC_H: usize = 48;
 /// Recogniser width downsampling (input pixels per CTC timestep).
 const REC_STRIDE: usize = 8;
 /// Widest line crop fed to the recogniser.
 const REC_MAX_W: usize = 3200;
-/// Crops per recogniser batch.
+/// Most crops per recogniser batch.
 const REC_BATCH: usize = 8;
+/// Most padded input columns per recogniser batch. Activation memory grows
+/// with batch × width, so long lines go in small batches.
+const REC_BATCH_COLS: usize = 2048;
 /// Pad crop widths up to a multiple of this, so GPU kernels see few shapes.
 const REC_W_BUCKET: usize = 64;
 /// Longest side fed to the detector.
 const DET_MAX_SIDE: usize = 2560;
+/// Longest side of the first, fast detection pass (a Letter page at 150 dpi
+/// scaled by ~0.78). Smaller sizes find the same lines but with box edges
+/// coarse enough to cost the recogniser the odd glyph (`ll`, `Ø`).
+const DET_FAST_SIDE: usize = 1280;
+/// When the typical line box (DB-unclipped, so ~1.5x the glyph height)
+/// found by the fast pass is shorter than this in detector pixels, the page
+/// has small print: detect again at full size.
+const DET_MIN_LINE_H: f64 = 14.0;
+/// Width cap (in multiples of the line height) of the crops used for the
+/// reading-direction vote; a dozen glyphs settle it as well as a full line.
+const ORIENT_MAX_ASPECT: f64 = 10.0;
+/// Longest lines read both ways for the reading-direction vote.
+const ORIENT_LINES: usize = 4;
 
 /// Built-in neural OCR engine. Cheap to construct: the models and the GPU
 /// device are initialised lazily on the first page that needs OCR.
 pub struct NeuralOcrEngine {
     runtime: OnceLock<Result<Runtime, String>>,
+    /// Pages the current job will OCR (see [`OcrEngine::prepare`]).
+    pages_hint: std::sync::atomic::AtomicUsize,
 }
+
+/// Fewest pages to OCR in one document for the GPU to be worth its
+/// start-up cost; smaller jobs run on the CPU.
+pub const GPU_MIN_PAGES: usize = 8;
 
 impl Default for NeuralOcrEngine {
     fn default() -> Self {
@@ -81,6 +115,7 @@ impl NeuralOcrEngine {
     pub fn new() -> Self {
         Self {
             runtime: OnceLock::new(),
+            pages_hint: std::sync::atomic::AtomicUsize::new(1),
         }
     }
 
@@ -91,7 +126,9 @@ impl NeuralOcrEngine {
 
     fn runtime(&self) -> SpdfResult<&Runtime> {
         self.runtime
-            .get_or_init(Runtime::init)
+            .get_or_init(|| {
+                Runtime::init(self.pages_hint.load(std::sync::atomic::Ordering::Relaxed))
+            })
             .as_ref()
             .map_err(|e| SpdfError::Ocr(e.clone()))
     }
@@ -108,6 +145,12 @@ impl OcrEngine for NeuralOcrEngine {
         "neural"
     }
 
+    fn prepare(&self, pages: usize) {
+        // Only the first job decides the backend; later jobs reuse it.
+        self.pages_hint
+            .store(pages, std::sync::atomic::Ordering::Relaxed);
+    }
+
     fn recognize(&self, image: &[u8], _options: &OcrOptions) -> SpdfResult<Vec<OcrResult>> {
         let rt = self.runtime()?;
         let img = image::load_from_memory(image)
@@ -120,8 +163,17 @@ impl OcrEngine for NeuralOcrEngine {
             h,
         };
         let t0 = std::time::Instant::now();
-        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rt.ocr_page(&rgb)))
-            .map_err(|_| SpdfError::Ocr("neural OCR backend panicked".into()))??;
+        let run = || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rt.ocr_page(&rgb)))
+                .map_err(|_| SpdfError::Ocr("neural OCR backend panicked".into()))
+        };
+        // CPU kernels parallelise over the engine's own pool rather than the
+        // caller's page workers: pages share one model behind a lock, so
+        // the per-op parallelism is what makes a page fast.
+        let out = match &rt.pool {
+            Some(pool) => pool.install(run),
+            None => run(),
+        }??;
         tracing::debug!(
             backend = rt.backend,
             ms = t0.elapsed().as_millis() as u64,
@@ -140,6 +192,8 @@ struct LineRec {
 
 struct Runtime {
     backend: &'static str,
+    /// Thread pool for the CPU backend's kernels (`None` on a GPU).
+    pool: Option<rayon::ThreadPool>,
     charset: Charset,
     latin_charset: Charset,
     #[cfg(spdf_neural_models)]
@@ -157,50 +211,78 @@ struct Models {
     rec_latin: Option<rec_latin_model::Model>,
 }
 
+/// Embedded weights, aligned so tensors can alias them without a copy.
 #[cfg(spdf_neural_models)]
-const REC_SERVER: &[u8] = include_bytes!(concat!(
+#[repr(C, align(64))]
+struct Aligned<B: ?Sized>(B);
+
+#[cfg(spdf_neural_models)]
+static DET_BPK: &Aligned<[u8]> = &Aligned(*include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/model/ch_PP-OCRv5_det_mobile.bpk"
+)));
+#[cfg(spdf_neural_models)]
+static REC_BPK: &Aligned<[u8]> = &Aligned(*include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/model/ch_PP-OCRv5_rec_mobile.bpk"
+)));
+#[cfg(spdf_neural_models)]
+static REC_SERVER_BPK: &Aligned<[u8]> = &Aligned(*include_bytes!(concat!(
     env!("OUT_DIR"),
     "/model/ch_PP-OCRv5_rec_server.bpk"
-));
+)));
 #[cfg(spdf_neural_models)]
-const REC_LATIN: &[u8] = include_bytes!(concat!(
+static REC_LATIN_BPK: &Aligned<[u8]> = &Aligned(*include_bytes!(concat!(
     env!("OUT_DIR"),
     "/model/latin_PP-OCRv5_rec_mobile.bpk"
-));
+)));
+
+/// Load a model's weights straight from the binary's read-only data: on the
+/// CPU backend the tensors alias those pages instead of copying them (the
+/// server recogniser alone is ~85 MB).
+#[cfg(spdf_neural_models)]
+fn load_static<M: burn_store::ModuleSnapshot>(mut model: M, data: &'static [u8]) -> M {
+    let mut store = burn_store::BurnpackStore::from_static(data);
+    model
+        .load_from(&mut store)
+        .unwrap_or_else(|e| panic!("failed to load embedded OCR weights: {e}"));
+    model
+}
 
 impl Runtime {
     #[cfg(not(spdf_neural_models))]
-    fn init() -> Result<Self, String> {
+    fn init(_pages: usize) -> Result<Self, String> {
+        let _ = (cpu_pool, want_gpu);
         let _ = Mutex::new(());
         Err("neural OCR models were not available when spdf was built".into())
     }
 
     #[cfg(spdf_neural_models)]
-    fn init() -> Result<Self, String> {
-        use burn::tensor::Bytes;
-        const DET: &[u8] = include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/model/ch_PP-OCRv5_det_mobile.bpk"
-        ));
-        const REC: &[u8] = include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/model/ch_PP-OCRv5_rec_mobile.bpk"
-        ));
+    fn init(pages: usize) -> Result<Self, String> {
         const DICT: &str = include_str!(concat!(env!("OUT_DIR"), "/model/ppocrv5_dict.txt"));
         const LATIN_DICT: &str =
             include_str!(concat!(env!("OUT_DIR"), "/model/ppocrv5_latin_dict.txt"));
 
-        let (device, backend) = pick_device();
+        let t0 = std::time::Instant::now();
+        let (device, backend) = pick_device(pages);
+        let t_dev = t0.elapsed();
         let load = || {
-            let det = det_model::Model::from_bytes(Bytes::from_bytes_vec(DET.to_vec()), &device);
-            let rec = rec_model::Model::from_bytes(Bytes::from_bytes_vec(REC.to_vec()), &device);
+            let det = load_static(det_model::Model::new(&device), &DET_BPK.0);
+            let rec = load_static(rec_model::Model::new(&device), &REC_BPK.0);
             (det, rec)
         };
         let (det, rec) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(load))
             .map_err(|_| "failed to load neural OCR weights".to_string())?;
-        tracing::info!(backend, "spdf: neural OCR ready");
+        tracing::info!(
+            backend,
+            device_ms = t_dev.as_millis() as u64,
+            load_ms = (t0.elapsed() - t_dev).as_millis() as u64,
+            "spdf: neural OCR ready"
+        );
+        let pool = (backend == "cpu").then(cpu_pool).flatten();
         Ok(Self {
             backend,
+            pool,
             charset: Charset::from_dict(DICT),
             latin_charset: Charset::from_dict(LATIN_DICT),
             models: Mutex::new(Models {
@@ -214,7 +296,7 @@ impl Runtime {
     }
 
     #[cfg(not(spdf_neural_models))]
-    fn detect(&self, _img: &Rgb<'_>) -> SpdfResult<Vec<DetBox>> {
+    fn detect(&self, _img: &Rgb<'_>, _max_side: usize) -> SpdfResult<(Vec<DetBox>, f64)> {
         Err(SpdfError::Ocr("neural OCR unavailable".into()))
     }
 
@@ -233,11 +315,13 @@ impl Runtime {
         Err(SpdfError::Ocr("neural OCR unavailable".into()))
     }
 
-    /// Run the detector; boxes come back in image pixel coordinates.
+    /// Run the detector on the image scaled so its longest side is at most
+    /// `max_side`. Boxes come back in image pixel coordinates, together with
+    /// the detector-to-image scale factor.
     #[cfg(spdf_neural_models)]
-    fn detect(&self, img: &Rgb<'_>) -> SpdfResult<Vec<DetBox>> {
+    fn detect(&self, img: &Rgb<'_>, max_side: usize) -> SpdfResult<(Vec<DetBox>, f64)> {
         use burn::prelude::*;
-        let (dw, dh) = det_size(img.w, img.h);
+        let (dw, dh) = det_size(img.w, img.h, max_side);
         let input = det_input(img, dw, dh);
         let prob: Vec<f32> = {
             let m = self
@@ -264,7 +348,21 @@ impl Runtime {
                 *r = scale_rect(r, sx, sy);
             }
         }
-        Ok(boxes)
+        Ok((boxes, (sx + sy) / 2.0))
+    }
+
+    /// Detect text lines: a fast pass on a downscaled page, repeated at
+    /// full size only when that pass finds nothing or mostly small print.
+    fn detect_adaptive(&self, img: &Rgb<'_>) -> SpdfResult<Vec<DetBox>> {
+        if det_size(img.w, img.h, DET_FAST_SIDE) == det_size(img.w, img.h, DET_MAX_SIDE) {
+            return Ok(self.detect(img, DET_MAX_SIDE)?.0);
+        }
+        let (boxes, scale) = self.detect(img, DET_FAST_SIDE)?;
+        if !needs_full_res(&boxes, scale) {
+            return Ok(boxes);
+        }
+        tracing::debug!(n = boxes.len(), "ocr: small print, detecting at full size");
+        Ok(self.detect(img, DET_MAX_SIDE)?.0)
     }
 
     /// Recognise normalised-height crops (`REC_H` rows, CHW RGB 0..255)
@@ -281,16 +379,12 @@ impl Runtime {
     /// Recognise crops with the larger server recogniser (loaded lazily).
     #[cfg(spdf_neural_models)]
     fn recognize_crops_server(&self, crops: &[(Vec<f32>, usize)]) -> SpdfResult<Vec<LineRec>> {
-        use burn::tensor::Bytes;
         let mut m = self
             .models
             .lock()
             .map_err(|_| SpdfError::Ocr("ocr lock poisoned".into()))?;
         if m.rec_server.is_none() {
-            let model = rec_server_model::Model::from_bytes(
-                Bytes::from_bytes_vec(REC_SERVER.to_vec()),
-                &m.device,
-            );
+            let model = load_static(rec_server_model::Model::new(&m.device), &REC_SERVER_BPK.0);
             m.rec_server = Some(model);
         }
         let m = &*m;
@@ -301,16 +395,12 @@ impl Runtime {
     /// Recognise crops with the Latin recogniser (loaded lazily).
     #[cfg(spdf_neural_models)]
     fn recognize_crops_latin(&self, crops: &[(Vec<f32>, usize)]) -> SpdfResult<Vec<LineRec>> {
-        use burn::tensor::Bytes;
         let mut m = self
             .models
             .lock()
             .map_err(|_| SpdfError::Ocr("ocr lock poisoned".into()))?;
         if m.rec_latin.is_none() {
-            let model = rec_latin_model::Model::from_bytes(
-                Bytes::from_bytes_vec(REC_LATIN.to_vec()),
-                &m.device,
-            );
+            let model = load_static(rec_latin_model::Model::new(&m.device), &REC_LATIN_BPK.0);
             m.rec_latin = Some(model);
         }
         let m = &*m;
@@ -380,7 +470,11 @@ fn run_rec(
     let mut order: Vec<usize> = (0..crops.len()).collect();
     order.sort_by_key(|&i| crops[i].1);
     let mut out: Vec<Option<LineRec>> = (0..crops.len()).map(|_| None).collect();
-    for chunk in order.chunks(REC_BATCH) {
+    let widths: Vec<usize> = order.iter().map(|&i| crops[i].1).collect();
+    let mut start = 0;
+    for len in rec_batches(&widths) {
+        let chunk = &order[start..start + len];
+        start += len;
         let max_w = chunk
             .iter()
             .map(|&i| crops[i].1)
@@ -443,6 +537,27 @@ fn run_rec(
         .collect())
 }
 
+/// Split crops (sorted by width, ascending) into consecutive batches of at
+/// most `REC_BATCH` crops and `REC_BATCH_COLS` padded columns; returns the
+/// batch lengths. A crop wider than the column budget gets a batch alone.
+fn rec_batches(sorted_widths: &[usize]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut n = 0;
+    for &w in sorted_widths {
+        // Widths ascend, so the newest crop sets the batch's padded width.
+        let bw = w.div_ceil(REC_W_BUCKET) * REC_W_BUCKET;
+        if n > 0 && (n == REC_BATCH || (n + 1) * bw > REC_BATCH_COLS) {
+            out.push(n);
+            n = 0;
+        }
+        n += 1;
+    }
+    if n > 0 {
+        out.push(n);
+    }
+    out
+}
+
 /// True for Han ideographs, kana, Hangul and CJK punctuation.
 fn is_cjk(c: char) -> bool {
     matches!(c as u32,
@@ -473,19 +588,33 @@ fn mostly_cjk(chars: &[ctc::DecodedChar]) -> bool {
 
 impl Runtime {
     fn ocr_page(&self, img: &Rgb<'_>) -> SpdfResult<Vec<OcrResult>> {
-        let boxes = self.detect(img)?;
+        let t = std::time::Instant::now();
+        let boxes = self.detect_adaptive(img)?;
+        tracing::debug!(
+            ms = t.elapsed().as_millis() as u64,
+            n = boxes.len(),
+            "ocr: detect"
+        );
         if boxes.is_empty() {
             return Ok(Vec::new());
         }
+        let t = std::time::Instant::now();
         let phi = self.reading_angle(img, &boxes)?;
+        tracing::debug!(ms = t.elapsed().as_millis() as u64, "ocr: orientation");
         let aligned: Vec<DetBox> = boxes.iter().map(|b| align_box(b, phi)).collect();
         let crops: Vec<(Vec<f32>, usize)> = aligned
             .iter()
             .map(|b| crop_line(img, &b.rect, false))
             .collect();
+        let t = std::time::Instant::now();
         let mut recs = self.recognize_crops(&crops)?;
+        tracing::debug!(ms = t.elapsed().as_millis() as u64, "ocr: rec");
+        let t = std::time::Instant::now();
         self.refine_cjk(&crops, &mut recs)?;
+        tracing::debug!(ms = t.elapsed().as_millis() as u64, "ocr: rec cjk");
+        let t = std::time::Instant::now();
         self.refine_latin(&crops, &mut recs)?;
+        tracing::debug!(ms = t.elapsed().as_millis() as u64, "ocr: rec latin");
         let frame = UprightFrame::new(img.w as f64, img.h as f64, phi);
         let mut out = Vec::new();
         for (b, rec) in aligned.iter().zip(recs) {
@@ -554,10 +683,10 @@ impl Runtime {
         // Vote between the two reading directions along that axis using the
         // recogniser's confidence on the longest lines.
         major.sort_by(|a, b| b.rect.w.partial_cmp(&a.rect.w).unwrap());
-        major.truncate(6);
+        major.truncate(ORIENT_LINES);
         let mut crops = Vec::with_capacity(major.len() * 2);
         for b in &major {
-            let r = align_box(b, axis).rect;
+            let r = orient_rect(&align_box(b, axis).rect);
             crops.push(crop_line(img, &r, false));
             crops.push(crop_line(img, &r, true));
         }
@@ -568,6 +697,30 @@ impl Runtime {
             back += ctc::line_confidence(&pair[1].chars) * pair[1].chars.len().max(1) as f64;
         }
         Ok(if back > fwd * 1.15 { axis + PI } else { axis })
+    }
+}
+
+/// True when the fast detection pass is not trustworthy: it found no text,
+/// or its median line is too short (in detector pixels) for reliable
+/// detection, so small print may have been missed or merged.
+fn needs_full_res(boxes: &[DetBox], scale: f64) -> bool {
+    let mut hs: Vec<f64> = boxes
+        .iter()
+        .map(|b| b.rect.w.min(b.rect.h) / scale.max(1e-9))
+        .collect();
+    if hs.is_empty() {
+        return true;
+    }
+    hs.sort_by(|a, b| a.total_cmp(b));
+    hs[hs.len() / 2] < DET_MIN_LINE_H
+}
+
+/// The central part of a line rectangle, at most `ORIENT_MAX_ASPECT` line
+/// heights long, for the reading-direction vote.
+fn orient_rect(r: &RotRect) -> RotRect {
+    RotRect {
+        w: r.w.min(ORIENT_MAX_ASPECT * r.h),
+        ..*r
     }
 }
 
@@ -656,11 +809,11 @@ fn scale_rect(r: &RotRect, sx: f64, sy: f64) -> RotRect {
 }
 
 /// Detector input size: the image scaled so the longest side is at most
-/// `DET_MAX_SIDE`, both sides rounded to a multiple of 32.
-fn det_size(w: usize, h: usize) -> (usize, usize) {
+/// `max_side`, both sides rounded to a multiple of 32.
+fn det_size(w: usize, h: usize, max_side: usize) -> (usize, usize) {
     let longest = w.max(h) as f64;
-    let scale = if longest > DET_MAX_SIDE as f64 {
-        DET_MAX_SIDE as f64 / longest
+    let scale = if longest > max_side as f64 {
+        max_side as f64 / longest
     } else {
         1.0
     };
@@ -700,10 +853,44 @@ fn crop_line(img: &Rgb<'_>, r: &RotRect, flip: bool) -> (Vec<f32>, usize) {
     (geom::crop_rotrect(img, r, w, REC_H, flip), w)
 }
 
-/// Pick the compute device: `SPDF_OCR_DEVICE` if set, else a wgpu GPU
-/// adapter if one works, else the portable CPU backend.
+/// Threads for CPU inference: `SPDF_OCR_THREADS` if set, else every
+/// available core up to [`MAX_CPU_THREADS`].
+fn cpu_threads() -> usize {
+    std::env::var("SPDF_OCR_THREADS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+                .min(MAX_CPU_THREADS)
+        })
+}
+
+fn cpu_pool() -> Option<rayon::ThreadPool> {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(cpu_threads())
+        .thread_name(|i| format!("spdf-nn-{i}"))
+        .build()
+        .ok()
+}
+
+/// Whether to try a GPU for a job of `pages` pages: `SPDF_OCR_DEVICE`
+/// decides when set (`cpu` → no, anything else → yes), otherwise only jobs
+/// of at least [`GPU_MIN_PAGES`] pages.
+fn want_gpu(device_env: &str, pages: usize) -> bool {
+    match device_env {
+        "" => pages >= GPU_MIN_PAGES,
+        "cpu" => false,
+        _ => true,
+    }
+}
+
+/// Pick the compute device: `SPDF_OCR_DEVICE` if set, else (for long jobs)
+/// a wgpu GPU adapter if one works, else the portable CPU backend.
 #[cfg(spdf_neural_models)]
-fn pick_device() -> (burn::prelude::Device, &'static str) {
+fn pick_device(pages: usize) -> (burn::prelude::Device, &'static str) {
     use burn::prelude::*;
     let works = |d: &Device| {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -721,7 +908,7 @@ fn pick_device() -> (burn::prelude::Device, &'static str) {
             return (d, "cuda");
         }
     }
-    if want != "cpu" {
+    if want_gpu(&want, pages) {
         // A missing adapter panics inside wgpu; keep that from reaching users.
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
@@ -742,10 +929,58 @@ mod tests {
 
     #[test]
     fn det_size_rounds_to_32_and_caps() {
-        assert_eq!(det_size(1275, 1651), (1280, 1664));
-        let (w, h) = det_size(5000, 2500);
+        assert_eq!(det_size(1275, 1651, DET_MAX_SIDE), (1280, 1664));
+        let (w, h) = det_size(5000, 2500, DET_MAX_SIDE);
         assert_eq!(w, 2560);
         assert_eq!(h % 32, 0);
+        // The fast pass keeps the aspect ratio within rounding.
+        let (w, h) = det_size(1275, 1651, DET_FAST_SIDE);
+        assert_eq!((w, h), (992, 1280));
+    }
+
+    fn line_box(w: f64, h: f64) -> DetBox {
+        let r = RotRect {
+            cx: 100.0,
+            cy: 100.0,
+            w,
+            h,
+            angle: 0.0,
+        };
+        DetBox {
+            rect: r,
+            core: r,
+            score: 0.9,
+        }
+    }
+
+    #[test]
+    fn full_res_detection_only_for_empty_or_small_print() {
+        // Image-space boxes; detector ran at half size (scale 2).
+        let body: Vec<DetBox> = (0..5).map(|_| line_box(400.0, 30.0)).collect();
+        assert!(!needs_full_res(&body, 2.0));
+        let tiny: Vec<DetBox> = (0..5).map(|_| line_box(200.0, 16.0)).collect();
+        assert!(needs_full_res(&tiny, 2.0));
+        assert!(!needs_full_res(&tiny, 1.0));
+        assert!(needs_full_res(&[], 2.0));
+        // Vertical lines are measured across, not along.
+        let vertical: Vec<DetBox> = (0..3).map(|_| line_box(30.0, 400.0)).collect();
+        assert!(!needs_full_res(&vertical, 2.0));
+    }
+
+    #[test]
+    fn orientation_crop_keeps_centre_and_caps_length() {
+        let r = RotRect {
+            cx: 50.0,
+            cy: 60.0,
+            w: 1000.0,
+            h: 20.0,
+            angle: 0.3,
+        };
+        let o = orient_rect(&r);
+        assert_eq!((o.cx, o.cy, o.h, o.angle), (50.0, 60.0, 20.0, 0.3));
+        assert!((o.w - ORIENT_MAX_ASPECT * 20.0).abs() < 1e-9);
+        let short = RotRect { w: 100.0, ..r };
+        assert_eq!(orient_rect(&short).w, 100.0);
     }
 
     #[test]
@@ -822,6 +1057,31 @@ mod tests {
         assert!(!mostly_cjk(&decoded("Total revenue 中 was up")));
         assert!(!mostly_cjk(&decoded("")));
         assert!(!mostly_cjk(&decoded("   ")));
+    }
+
+    #[test]
+    fn gpu_only_for_long_jobs_unless_forced() {
+        assert!(!want_gpu("", 1));
+        assert!(!want_gpu("", GPU_MIN_PAGES - 1));
+        assert!(want_gpu("", GPU_MIN_PAGES));
+        assert!(!want_gpu("cpu", 500));
+        assert!(want_gpu("wgpu", 1));
+        assert!(want_gpu("cuda", 1));
+    }
+
+    #[test]
+    fn rec_batches_respect_count_and_column_budget() {
+        assert_eq!(rec_batches(&[]), Vec::<usize>::new());
+        // Short crops: limited by the crop count.
+        assert_eq!(rec_batches(&[100; 20]), vec![8, 8, 4]);
+        // 1000 px pads to 1024: two per 2048-column batch.
+        assert_eq!(rec_batches(&[1000; 5]), vec![2, 2, 1]);
+        // A crop wider than the whole budget still gets recognised.
+        assert_eq!(rec_batches(&[200, 300, 3200]), vec![2, 1]);
+        let total: usize = rec_batches(&[64, 128, 640, 700, 900, 1500, 3000])
+            .iter()
+            .sum();
+        assert_eq!(total, 7);
     }
 
     #[test]

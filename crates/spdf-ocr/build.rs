@@ -3,8 +3,10 @@
 //! With the `neural` feature on, this fetches the pretrained PaddleOCR
 //! PP-OCRv5 mobile text detection (DBNet) and recognition (SVTR-LCNet, CTC)
 //! ONNX models, plus the PP-OCRv5 server recogniser used for CJK lines and the
-//! Latin recogniser fused in on Latin-script lines,, verifies them by SHA-256, and turns them into native Burn code
-//! with `burn-onnx`. The weights end up embedded in the final binary, so a
+//! Latin recogniser fused in on Latin-script lines, verifies them by SHA-256,
+//! simplifies their graphs (`src/neural/fold.rs`: element-wise ops folded into
+//! the convolutions, wide convolutions split by input channel) and turns them
+//! into native Burn code with `burn-onnx`. The weights end up embedded in the final binary, so a
 //! plain `cargo build` produces a self-contained OCR engine: no Python, no
 //! ONNX runtime, no system Tesseract.
 //!
@@ -17,12 +19,17 @@
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=src/neural/fold.rs");
     println!("cargo:rerun-if-env-changed=SPDF_OCR_MODEL_DIR");
     println!("cargo:rerun-if-env-changed=SPDF_OCR_SKIP_MODELS");
     println!("cargo::rustc-check-cfg=cfg(spdf_neural_models)");
     #[cfg(feature = "neural")]
     neural::run();
 }
+
+#[cfg(feature = "neural")]
+#[path = "src/neural/fold.rs"]
+mod fold;
 
 #[cfg(feature = "neural")]
 mod neural {
@@ -81,10 +88,27 @@ mod neural {
         let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
         match fetch_all() {
             Ok(dir) => {
-                let det = dir.join(MODELS[0].0);
-                let rec = dir.join(MODELS[1].0);
-                let rec_server = dir.join(MODELS[3].0);
-                let rec_latin = dir.join(MODELS[4].0);
+                // Fold the element-wise ops around each convolution into
+                // its weights before code generation (see `fold.rs`).
+                let opt_dir = out_dir.join("onnx-opt");
+                fs::create_dir_all(&opt_dir).expect("create onnx-opt dir");
+                let opt = |i: usize| {
+                    let dst = opt_dir.join(MODELS[i].0);
+                    match optimize_onnx(&dir.join(MODELS[i].0), &dst) {
+                        Ok(()) => dst,
+                        Err(e) => {
+                            println!(
+                                "cargo:warning=spdf-ocr: {}: graph folding skipped: {e}",
+                                MODELS[i].0
+                            );
+                            dir.join(MODELS[i].0)
+                        }
+                    }
+                };
+                let det = opt(0);
+                let rec = opt(1);
+                let rec_server = opt(3);
+                let rec_latin = opt(4);
                 burn_onnx::ModelGen::new()
                     .input(det.to_str().expect("utf-8 model path"))
                     .input(rec.to_str().expect("utf-8 model path"))
@@ -103,6 +127,150 @@ mod neural {
                 println!("cargo:warning=spdf-ocr: neural OCR models unavailable: {e}");
             }
         }
+    }
+
+    /// Rewrite `src` with [`crate::fold`] applied and write it to `dst`.
+    fn optimize_onnx(src: &Path, dst: &Path) -> Result<(), String> {
+        use crate::fold;
+        use onnx_ir::{Message, ModelProto};
+        use std::collections::HashSet;
+        const FLOAT: i32 = 1;
+
+        let bytes = fs::read(src).map_err(|e| format!("read {}: {e}", src.display()))?;
+        let mut model = ModelProto::parse_from_bytes(&bytes).map_err(|e| format!("parse: {e}"))?;
+        let graph = model.graph.as_mut().ok_or("model has no graph")?;
+
+        let mut g = fold::Graph::default();
+        for t in &graph.initializer {
+            if t.data_type != FLOAT {
+                continue;
+            }
+            let data: Vec<f32> = if !t.raw_data.is_empty() {
+                t.raw_data
+                    .chunks_exact(4)
+                    .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                    .collect()
+            } else {
+                t.float_data.clone()
+            };
+            let numel: i64 = t.dims.iter().product();
+            if numel as usize != data.len() {
+                continue; // external data or malformed: leave it alone
+            }
+            g.consts.insert(
+                t.name.clone(),
+                fold::Const {
+                    dims: t.dims.clone(),
+                    data,
+                },
+            );
+        }
+        for (i, n) in graph.node.iter().enumerate() {
+            let attr = |name: &str| n.attribute.iter().find(|a| a.name == name);
+            let zero_pad = attr("pads").is_none_or(|a| a.ints.iter().all(|&p| p == 0))
+                && attr("auto_pad").is_none_or(|a| matches!(&a.s[..], b"" | b"NOTSET" | b"VALID"));
+            let mut node = fold::Node::new(&n.op_type, &[], &[]);
+            node.inputs = n.input.clone();
+            node.outputs = n.output.clone();
+            node.zero_pad = zero_pad;
+            node.epsilon = attr("epsilon").map_or(1e-5, |a| a.f);
+            node.group = attr("group").map_or(1, |a| a.i);
+            node.attrs_from = Some(i);
+            g.nodes.push(node);
+        }
+        g.outputs = graph.output.iter().map(|v| v.name.clone()).collect();
+        let stats = g.optimize();
+
+        let protos = std::mem::take(&mut graph.node);
+        let mut names = HashSet::new();
+        graph.node = g
+            .nodes
+            .iter()
+            .filter(|n| !n.removed)
+            .map(|n| {
+                let mut p = match n.attrs_from {
+                    Some(j) => protos[j].clone(),
+                    None => onnx_ir::NodeProto::new(),
+                };
+                p.op_type = n.op.clone();
+                // Nodes split from one source must not share its name.
+                if !names.insert(p.name.clone()) || p.name.is_empty() {
+                    p.name = format!("{}__node", n.outputs[0]);
+                    names.insert(p.name.clone());
+                }
+                p.input = n.inputs.clone();
+                p.output = n.outputs.clone();
+                p
+            })
+            .collect();
+        let used: HashSet<String> = graph
+            .node
+            .iter()
+            .flat_map(|n| n.input.iter().cloned())
+            .chain(graph.output.iter().map(|v| v.name.clone()))
+            .collect();
+        let had: HashSet<String> = graph.initializer.iter().map(|t| t.name.clone()).collect();
+        graph.initializer.retain(|t| used.contains(&t.name));
+        // Old exporters also list initializers as graph inputs.
+        graph
+            .input
+            .retain(|v| !had.contains(&v.name) || used.contains(&v.name));
+        let mut fresh: Vec<&String> = g
+            .live_consts()
+            .into_iter()
+            .filter(|n| !had.contains(n))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .map(|n| g.consts.get_key_value(&n).expect("live const").0)
+            .collect();
+        fresh.sort();
+        for name in fresh {
+            let c = &g.consts[name];
+            let mut t = onnx_ir::TensorProto::new();
+            t.name = name.clone();
+            t.dims = c.dims.clone();
+            t.data_type = FLOAT;
+            t.raw_data = c
+                .data
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<u8>>()
+                .into();
+            graph.initializer.push(t);
+        }
+        let mut ints: Vec<(&String, &Vec<i64>)> = g
+            .int_consts
+            .iter()
+            .filter(|(n, _)| used.contains(*n))
+            .collect();
+        ints.sort();
+        for (name, v) in ints {
+            const INT64: i32 = 7;
+            let mut t = onnx_ir::TensorProto::new();
+            t.name = name.clone();
+            t.dims = vec![v.len() as i64];
+            t.data_type = INT64;
+            t.raw_data = v
+                .iter()
+                .flat_map(|x| x.to_le_bytes())
+                .collect::<Vec<u8>>()
+                .into();
+            graph.initializer.push(t);
+        }
+        let out = model
+            .write_to_bytes()
+            .map_err(|e| format!("serialize: {e}"))?;
+        fs::write(dst, out).map_err(|e| format!("write {}: {e}", dst.display()))?;
+        // Build-script stdout is kept in the build log (`cargo -vv`).
+        println!(
+            "spdf-ocr: {}: folded {} identity, {} post-conv, {} pre-conv ops; split {} convs",
+            src.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
+            stats.identity,
+            stats.after_conv,
+            stats.before_conv,
+            stats.split_conv
+        );
+        Ok(())
     }
 
     fn cache_dir() -> PathBuf {

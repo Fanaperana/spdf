@@ -37,6 +37,11 @@ pub struct OcrResult {
 pub trait OcrEngine: Send + Sync {
     fn name(&self) -> &'static str;
 
+    /// Called once per document, before any page is recognised, with the
+    /// number of pages that will be. Engines with an expensive setup choice
+    /// (e.g. GPU vs CPU) can size it to the job. Default: no-op.
+    fn prepare(&self, _pages: usize) {}
+
     /// Run OCR on an image (PNG/JPEG bytes).
     fn recognize(&self, image: &[u8], options: &OcrOptions) -> SpdfResult<Vec<OcrResult>>;
 
