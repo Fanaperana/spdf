@@ -258,7 +258,8 @@ def suite_edge(engine: str, workers: int) -> dict:
         r = run_measured(engine_cmd(engine, pdf, out, "text", ocr=True, password=meta.get("password")), timeout=TIMEOUT)
         pred = out.read_text(encoding="utf-8", errors="replace") if out.exists() else ""
         res = {"wall": r["wall"], "peak_rss_mb": r["peak_rss_mb"], "rc": r["rc"],
-               "timed_out": r["timed_out"], "panic": r["panic"], "kind": meta["kind"]}
+               "timed_out": r["timed_out"], "panic": r["panic"], "kind": meta["kind"],
+               "tags": meta.get("tags", [])}
         if meta["kind"] == "robust":
             res["score"] = 0.0 if (r["timed_out"] or r["panic"]) else 1.0
         else:
@@ -283,6 +284,8 @@ def suite_edge(engine: str, workers: int) -> dict:
         "cases": results,
         "nid_mean": statistics.fmean(v["nid"] for v in text_cases.values()),
         "f1_mean": statistics.fmean(v["f1"] for v in text_cases.values()),
+        "ocr_nid_mean": (statistics.fmean(v["nid"] for v in text_cases.values() if "ocr" in v.get("tags", []))
+                         if any("ocr" in v.get("tags", []) for v in text_cases.values()) else None),
         "robust_pass": statistics.fmean(v["score"] for v in robust.values()) if robust else 1.0,
         "huge_sec": huge_r["wall"] if huge_r else None,
         "huge_rss_mb": huge_r["peak_rss_mb"] if huge_r else None,

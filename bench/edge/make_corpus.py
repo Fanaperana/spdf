@@ -406,7 +406,9 @@ def case_corrupt_bad_xref():
     return bad, gt, {"tags": ["corrupt"]}
 
 
-def _render_to_image_pdf(pdf_bytes: bytes, skew: float = 0.0, dpi: int = 200) -> bytes:
+def _render_to_image_pdf(pdf_bytes: bytes, skew: float = 0.0, dpi: int = 200, noise: float = 0.0,
+                         jpeg_quality: int | None = None, rotate: int = 0) -> bytes:
+    """Rasterise every page (like a scanner would) and wrap the images in an image-only PDF."""
     import pypdfium2 as pdfium
     from PIL import Image
     doc = pdfium.PdfDocument(pdf_bytes)
@@ -415,9 +417,18 @@ def _render_to_image_pdf(pdf_bytes: bytes, skew: float = 0.0, dpi: int = 200) ->
         im = doc[i].render(scale=dpi / 72).to_pil().convert("L")
         if skew:
             im = im.rotate(skew, expand=True, fillcolor=255)
+        if rotate:
+            im = im.rotate(rotate, expand=True, fillcolor=255)
+        if noise:
+            grain = Image.effect_noise(im.size, 64).point(lambda v: 255 if v > 128 else v * 2)
+            im = Image.blend(im, grain, noise)
+        if jpeg_quality:
+            buf = io.BytesIO(); im.save(buf, format="JPEG", quality=jpeg_quality); buf.seek(0)
+            im = Image.open(buf).convert("L")
         imgs.append(im)
     out = io.BytesIO()
-    imgs[0].save(out, format="PDF", resolution=dpi, save_all=True, append_images=imgs[1:])
+    kw = {"quality": jpeg_quality} if jpeg_quality else {}
+    imgs[0].save(out, format="PDF", resolution=dpi, save_all=True, append_images=imgs[1:], **kw)
     return out.getvalue()
 
 
@@ -429,6 +440,48 @@ def case_scanned():
 def case_scanned_skewed():
     b, gt = case_two_column()
     return _render_to_image_pdf(bytes(b), skew=2.5), gt, {"tags": ["ocr"]}
+
+
+def case_scanned_lowdpi():
+    b, gt = case_simple()
+    return _render_to_image_pdf(bytes(b), dpi=100), gt, {"tags": ["ocr"]}
+
+
+def case_scanned_noisy_jpeg():
+    b, gt = case_justified()
+    return _render_to_image_pdf(bytes(b), dpi=150, noise=0.18, jpeg_quality=35), gt, {"tags": ["ocr"]}
+
+
+def case_scanned_table():
+    b, gt = case_table_bordered()
+    return _render_to_image_pdf(bytes(b)), gt, {"tags": ["ocr", "table"]}
+
+
+def case_scanned_chinese():
+    b, gt = case_cjk_chinese()
+    return _render_to_image_pdf(bytes(b)), gt, {"tags": ["ocr", "cjk"]}
+
+
+def case_scanned_multilang():
+    b, gt = case_diacritics()
+    return _render_to_image_pdf(bytes(b)), gt, {"tags": ["ocr", "latin-ext"]}
+
+
+def case_scanned_rotated_90():
+    b, gt = case_simple()
+    return _render_to_image_pdf(bytes(b), rotate=90), gt, {"tags": ["ocr", "rotation"]}
+
+
+def case_scanned_mixed_pages():
+    """Page 1 born-digital, page 2 an image-only scan: OCR must fire only where needed."""
+    b1, gt1 = case_headers_footers()
+    b2, gt2 = case_table_bordered()
+    w = PdfWriter()
+    w.append(PdfReader(io.BytesIO(bytes(b1))), pages=[0])
+    w.append(PdfReader(io.BytesIO(_render_to_image_pdf(bytes(b2)))))
+    o = io.BytesIO(); w.write(o)
+    gt1_first = gt1.split("\nACME Corp Confidential")[0]
+    return o.getvalue(), gt1_first + "\n" + gt2, {"tags": ["ocr", "mixed"]}
 
 
 def case_huge():
@@ -487,6 +540,13 @@ CASES = {
     "corrupt_no_xref": case_corrupt_no_xref,
     "scanned": case_scanned,
     "scanned_skewed": case_scanned_skewed,
+    "scanned_lowdpi": case_scanned_lowdpi,
+    "scanned_noisy_jpeg": case_scanned_noisy_jpeg,
+    "scanned_table": case_scanned_table,
+    "scanned_chinese": case_scanned_chinese,
+    "scanned_multilang": case_scanned_multilang,
+    "scanned_rotated_90": case_scanned_rotated_90,
+    "scanned_mixed_pages": case_scanned_mixed_pages,
     "huge_400_pages": case_huge,
     "garbage_bytes": case_garbage,
     "zero_bytes": case_zero_bytes,

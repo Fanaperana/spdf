@@ -29,12 +29,13 @@ HEADLINE = [
     ("odl.peak_rss_mb", -1, "rel:0.03", "rel:0.20"),
     ("edge.nid_mean", +1, 0.0005, 0.002),
     ("edge.f1_mean", +1, 0.0005, 0.002),
+    ("edge.ocr_nid_mean", +1, 0.0005, 0.002),
     ("edge.robust_pass", +1, 0, 0),
     ("edge.huge_sec", -1, "rel:0.03", "rel:0.25"),
     ("edge.huge_rss_mb", -1, "rel:0.03", "rel:0.25"),
 ]
 CASE_TIE, CASE_REG = 0.005, 0.01
-HEADLINE_MUST_WIN = ["odl.overall", "odl.nid", "odl.teds", "odl.mhs", "edge.nid_mean", "edge.f1_mean"]
+HEADLINE_MUST_WIN = ["odl.overall", "odl.nid", "odl.teds", "odl.mhs", "edge.nid_mean", "edge.f1_mean", "edge.ocr_nid_mean"]
 
 
 def get(d: dict, path: str):
@@ -145,7 +146,7 @@ def render_md(run: dict, cmp: dict, history: list[dict]) -> str:
         "",
         f"**Wins {cmp['wins']} · ties {cmp['ties']} · losses {cmp['losses']}** — "
         + ("spdf beats LiteParse: no losses on any tracked metric and wins on every headline accuracy metric."
-           if cmp["beats_liteparse"] else "spdf does not yet beat LiteParse (needs zero losses + wins on odl.overall/nid/teds/mhs and edge nid/f1)."),
+           if cmp["beats_liteparse"] else "spdf does not yet beat LiteParse (needs zero losses + wins on odl.overall/nid/teds/mhs and edge nid/f1/ocr)."),
         "",
         "| metric | better | spdf | LiteParse | status |",
         "|---|---|---:|---:|---|",
