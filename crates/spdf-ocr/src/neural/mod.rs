@@ -38,6 +38,19 @@ mod det_model {
 mod rec_model {
     include!(concat!(env!("OUT_DIR"), "/model/ch_PP-OCRv5_rec_mobile.rs"));
 }
+#[cfg(spdf_neural_models)]
+#[allow(clippy::all, unused)]
+mod rec_server_model {
+    include!(concat!(env!("OUT_DIR"), "/model/ch_PP-OCRv5_rec_server.rs"));
+}
+#[cfg(spdf_neural_models)]
+#[allow(clippy::all, unused)]
+mod rec_latin_model {
+    include!(concat!(
+        env!("OUT_DIR"),
+        "/model/latin_PP-OCRv5_rec_mobile.rs"
+    ));
+}
 
 /// Recogniser input height for PP-OCRv5.
 const REC_H: usize = 48;
@@ -128,6 +141,7 @@ struct LineRec {
 struct Runtime {
     backend: &'static str,
     charset: Charset,
+    latin_charset: Charset,
     #[cfg(spdf_neural_models)]
     models: Mutex<Models>,
 }
@@ -137,7 +151,22 @@ struct Models {
     device: burn::prelude::Device,
     det: det_model::Model,
     rec: rec_model::Model,
+    /// Server recogniser, loaded on the first CJK line.
+    rec_server: Option<rec_server_model::Model>,
+    /// Latin recogniser, loaded on the first Latin-script line.
+    rec_latin: Option<rec_latin_model::Model>,
 }
+
+#[cfg(spdf_neural_models)]
+const REC_SERVER: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/model/ch_PP-OCRv5_rec_server.bpk"
+));
+#[cfg(spdf_neural_models)]
+const REC_LATIN: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/model/latin_PP-OCRv5_rec_mobile.bpk"
+));
 
 impl Runtime {
     #[cfg(not(spdf_neural_models))]
@@ -158,6 +187,8 @@ impl Runtime {
             "/model/ch_PP-OCRv5_rec_mobile.bpk"
         ));
         const DICT: &str = include_str!(concat!(env!("OUT_DIR"), "/model/ppocrv5_dict.txt"));
+        const LATIN_DICT: &str =
+            include_str!(concat!(env!("OUT_DIR"), "/model/ppocrv5_latin_dict.txt"));
 
         let (device, backend) = pick_device();
         let load = || {
@@ -171,7 +202,14 @@ impl Runtime {
         Ok(Self {
             backend,
             charset: Charset::from_dict(DICT),
-            models: Mutex::new(Models { device, det, rec }),
+            latin_charset: Charset::from_dict(LATIN_DICT),
+            models: Mutex::new(Models {
+                device,
+                det,
+                rec,
+                rec_server: None,
+                rec_latin: None,
+            }),
         })
     }
 
@@ -182,6 +220,16 @@ impl Runtime {
 
     #[cfg(not(spdf_neural_models))]
     fn recognize_crops(&self, _crops: &[(Vec<f32>, usize)]) -> SpdfResult<Vec<LineRec>> {
+        Err(SpdfError::Ocr("neural OCR unavailable".into()))
+    }
+
+    #[cfg(not(spdf_neural_models))]
+    fn recognize_crops_latin(&self, _crops: &[(Vec<f32>, usize)]) -> SpdfResult<Vec<LineRec>> {
+        Err(SpdfError::Ocr("neural OCR unavailable".into()))
+    }
+
+    #[cfg(not(spdf_neural_models))]
+    fn recognize_crops_server(&self, _crops: &[(Vec<f32>, usize)]) -> SpdfResult<Vec<LineRec>> {
         Err(SpdfError::Ocr("neural OCR unavailable".into()))
     }
 
@@ -219,80 +267,211 @@ impl Runtime {
         Ok(boxes)
     }
 
-    /// Recognise normalised-height crops (`REC_H` rows, CHW RGB 0..255).
+    /// Recognise normalised-height crops (`REC_H` rows, CHW RGB 0..255)
+    /// with the fast mobile recogniser.
     #[cfg(spdf_neural_models)]
     fn recognize_crops(&self, crops: &[(Vec<f32>, usize)]) -> SpdfResult<Vec<LineRec>> {
-        use burn::prelude::*;
-        let mut order: Vec<usize> = (0..crops.len()).collect();
-        order.sort_by_key(|&i| crops[i].1);
-        let mut out: Vec<Option<LineRec>> = (0..crops.len()).map(|_| None).collect();
         let m = self
             .models
             .lock()
             .map_err(|_| SpdfError::Ocr("ocr lock poisoned".into()))?;
-        for chunk in order.chunks(REC_BATCH) {
-            let max_w = chunk
-                .iter()
-                .map(|&i| crops[i].1)
-                .max()
-                .unwrap_or(REC_W_BUCKET);
-            let bw = max_w.div_ceil(REC_W_BUCKET) * REC_W_BUCKET;
-            let b = chunk.len();
-            let plane = REC_H * bw;
-            let mut data = vec![0f32; b * 3 * plane];
-            for (bi, &i) in chunk.iter().enumerate() {
-                let (crop, cw) = (&crops[i].0, crops[i].1);
-                let cplane = REC_H * cw;
-                for c in 0..3 {
-                    // Paddle models were trained on BGR input.
-                    let src = &crop[(2 - c) * cplane..(3 - c) * cplane];
-                    let dst = &mut data[(bi * 3 + c) * plane..(bi * 3 + c + 1) * plane];
-                    for y in 0..REC_H {
-                        for x in 0..cw {
-                            dst[y * bw + x] = src[y * cw + x] / 127.5 - 1.0;
-                        }
+        run_rec(&m.device, &self.charset, crops, |x| m.rec.forward(x))
+    }
+
+    /// Recognise crops with the larger server recogniser (loaded lazily).
+    #[cfg(spdf_neural_models)]
+    fn recognize_crops_server(&self, crops: &[(Vec<f32>, usize)]) -> SpdfResult<Vec<LineRec>> {
+        use burn::tensor::Bytes;
+        let mut m = self
+            .models
+            .lock()
+            .map_err(|_| SpdfError::Ocr("ocr lock poisoned".into()))?;
+        if m.rec_server.is_none() {
+            let model = rec_server_model::Model::from_bytes(
+                Bytes::from_bytes_vec(REC_SERVER.to_vec()),
+                &m.device,
+            );
+            m.rec_server = Some(model);
+        }
+        let m = &*m;
+        let rec = m.rec_server.as_ref().expect("loaded above");
+        run_rec(&m.device, &self.charset, crops, |x| rec.forward(x))
+    }
+
+    /// Recognise crops with the Latin recogniser (loaded lazily).
+    #[cfg(spdf_neural_models)]
+    fn recognize_crops_latin(&self, crops: &[(Vec<f32>, usize)]) -> SpdfResult<Vec<LineRec>> {
+        use burn::tensor::Bytes;
+        let mut m = self
+            .models
+            .lock()
+            .map_err(|_| SpdfError::Ocr("ocr lock poisoned".into()))?;
+        if m.rec_latin.is_none() {
+            let model = rec_latin_model::Model::from_bytes(
+                Bytes::from_bytes_vec(REC_LATIN.to_vec()),
+                &m.device,
+            );
+            m.rec_latin = Some(model);
+        }
+        let m = &*m;
+        let rec = m.rec_latin.as_ref().expect("loaded above");
+        run_rec(&m.device, &self.latin_charset, crops, |x| rec.forward(x))
+    }
+
+    /// Re-read every non-CJK line with the Latin recogniser and fuse the two
+    /// decodes character by character (see [`ctc::fuse`]): the primary
+    /// dictionary has no `ï`, `Ø`, `ź`, ..., while the Latin one has no
+    /// Vietnamese tone marks, so each fills the other's gaps.
+    fn refine_latin(&self, crops: &[(Vec<f32>, usize)], recs: &mut [LineRec]) -> SpdfResult<()> {
+        let idx: Vec<usize> = recs
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| !mostly_cjk(&r.chars))
+            .map(|(i, _)| i)
+            .collect();
+        if idx.is_empty() {
+            return Ok(());
+        }
+        let sub: Vec<(Vec<f32>, usize)> = idx.iter().map(|&i| crops[i].clone()).collect();
+        let latin = self.recognize_crops_latin(&sub)?;
+        for (i, l) in idx.into_iter().zip(latin) {
+            if l.content_steps != recs[i].content_steps {
+                continue;
+            }
+            recs[i].chars = ctc::fuse(&recs[i].chars, &l.chars, &self.charset, &self.latin_charset);
+        }
+        Ok(())
+    }
+
+    /// Re-read lines the mobile model decoded as mostly CJK with the server
+    /// recogniser, which is markedly better on Han / kana glyphs. Latin
+    /// lines stay with the mobile model, whose word spacing is better.
+    fn refine_cjk(&self, crops: &[(Vec<f32>, usize)], recs: &mut [LineRec]) -> SpdfResult<()> {
+        let idx: Vec<usize> = recs
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| mostly_cjk(&r.chars))
+            .map(|(i, _)| i)
+            .collect();
+        if idx.is_empty() {
+            return Ok(());
+        }
+        let sub: Vec<(Vec<f32>, usize)> = idx.iter().map(|&i| crops[i].clone()).collect();
+        let better = self.recognize_crops_server(&sub)?;
+        for (i, r) in idx.into_iter().zip(better) {
+            if !r.chars.is_empty() {
+                recs[i] = r;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Run a CTC recogniser over normalised-height crops, batching crops of
+/// similar width.
+#[cfg(spdf_neural_models)]
+fn run_rec(
+    device: &burn::prelude::Device,
+    charset: &Charset,
+    crops: &[(Vec<f32>, usize)],
+    forward: impl Fn(burn::prelude::Tensor<4>) -> burn::prelude::Tensor<3>,
+) -> SpdfResult<Vec<LineRec>> {
+    use burn::prelude::*;
+    let mut order: Vec<usize> = (0..crops.len()).collect();
+    order.sort_by_key(|&i| crops[i].1);
+    let mut out: Vec<Option<LineRec>> = (0..crops.len()).map(|_| None).collect();
+    for chunk in order.chunks(REC_BATCH) {
+        let max_w = chunk
+            .iter()
+            .map(|&i| crops[i].1)
+            .max()
+            .unwrap_or(REC_W_BUCKET);
+        let bw = max_w.div_ceil(REC_W_BUCKET) * REC_W_BUCKET;
+        let b = chunk.len();
+        let plane = REC_H * bw;
+        let mut data = vec![0f32; b * 3 * plane];
+        for (bi, &i) in chunk.iter().enumerate() {
+            let (crop, cw) = (&crops[i].0, crops[i].1);
+            let cplane = REC_H * cw;
+            for c in 0..3 {
+                // Paddle models were trained on BGR input.
+                let src = &crop[(2 - c) * cplane..(3 - c) * cplane];
+                let dst = &mut data[(bi * 3 + c) * plane..(bi * 3 + c + 1) * plane];
+                for y in 0..REC_H {
+                    for x in 0..cw {
+                        dst[y * bw + x] = src[y * cw + x] / 127.5 - 1.0;
                     }
                 }
             }
-            let x = Tensor::<4>::from_data(TensorData::new(data, [b, 3, REC_H, bw]), &m.device);
-            let y = m.rec.forward(x);
-            let [_, steps, classes] = y.dims();
-            if classes != self.charset.num_classes() {
-                return Err(SpdfError::Ocr(format!(
-                    "rec model has {classes} classes, dictionary expects {}",
-                    self.charset.num_classes()
-                )));
-            }
-            let (maxp, idx) = y.max_dim_with_indices(2);
-            let probs: Vec<f32> = maxp
-                .into_data()
-                .try_to_vec::<f32>()
-                .map_err(|e| SpdfError::Ocr(format!("rec output: {e:?}")))?;
-            let idx: Vec<usize> = idx
-                .into_data()
-                .iter::<i64>()
-                .map(|v| v.max(0) as usize)
-                .collect();
-            for (bi, &i) in chunk.iter().enumerate() {
-                let r = bi * steps..(bi + 1) * steps;
-                let content_steps = (crops[i].1 * steps).div_ceil(bw).clamp(1, steps);
-                let chars = ctc::greedy_decode(
-                    &idx[r.clone()][..content_steps],
-                    &probs[r][..content_steps],
-                    &self.charset,
-                );
-                out[i] = Some(LineRec {
-                    chars,
-                    content_steps,
-                });
-            }
         }
-        Ok(out
-            .into_iter()
-            .map(|o| o.expect("every crop recognised"))
-            .collect())
+        let x = Tensor::<4>::from_data(TensorData::new(data, [b, 3, REC_H, bw]), device);
+        let y = forward(x);
+        let [_, steps, classes] = y.dims();
+        if classes != charset.num_classes() {
+            return Err(SpdfError::Ocr(format!(
+                "rec model has {classes} classes, dictionary expects {}",
+                charset.num_classes()
+            )));
+        }
+        let (maxp, idx) = y.max_dim_with_indices(2);
+        let probs: Vec<f32> = maxp
+            .into_data()
+            .try_to_vec::<f32>()
+            .map_err(|e| SpdfError::Ocr(format!("rec output: {e:?}")))?;
+        let idx: Vec<usize> = idx
+            .into_data()
+            .iter::<i64>()
+            .map(|v| v.max(0) as usize)
+            .collect();
+        for (bi, &i) in chunk.iter().enumerate() {
+            let r = bi * steps..(bi + 1) * steps;
+            let content_steps = (crops[i].1 * steps).div_ceil(bw).clamp(1, steps);
+            let chars = ctc::greedy_decode(
+                &idx[r.clone()][..content_steps],
+                &probs[r][..content_steps],
+                charset,
+            );
+            out[i] = Some(LineRec {
+                chars,
+                content_steps,
+            });
+        }
     }
+    Ok(out
+        .into_iter()
+        .map(|o| o.expect("every crop recognised"))
+        .collect())
+}
 
+/// True for Han ideographs, kana, Hangul and CJK punctuation.
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x1100..=0x11FF
+        | 0x3000..=0x30FF
+        | 0x3130..=0x318F
+        | 0x3400..=0x4DBF
+        | 0x4E00..=0x9FFF
+        | 0xAC00..=0xD7AF
+        | 0xF900..=0xFAFF
+        | 0xFF00..=0xFFEF
+        | 0x20000..=0x2FA1F)
+}
+
+/// A decoded line is CJK when at least a third of its visible characters
+/// are CJK (so one stray glyph on a Latin line does not count).
+fn mostly_cjk(chars: &[ctc::DecodedChar]) -> bool {
+    let (mut cjk, mut total) = (0usize, 0usize);
+    for c in chars.iter().flat_map(|d| d.text.chars()) {
+        if c.is_whitespace() {
+            continue;
+        }
+        total += 1;
+        cjk += usize::from(is_cjk(c));
+    }
+    cjk > 0 && cjk * 3 >= total
+}
+
+impl Runtime {
     fn ocr_page(&self, img: &Rgb<'_>) -> SpdfResult<Vec<OcrResult>> {
         let boxes = self.detect(img)?;
         if boxes.is_empty() {
@@ -304,7 +483,9 @@ impl Runtime {
             .iter()
             .map(|b| crop_line(img, &b.rect, false))
             .collect();
-        let recs = self.recognize_crops(&crops)?;
+        let mut recs = self.recognize_crops(&crops)?;
+        self.refine_cjk(&crops, &mut recs)?;
+        self.refine_latin(&crops, &mut recs)?;
         let frame = UprightFrame::new(img.w as f64, img.h as f64, phi);
         let mut out = Vec::new();
         for (b, rec) in aligned.iter().zip(recs) {
@@ -617,6 +798,30 @@ mod tests {
         let a = align_box(&b, PI + 0.02);
         assert!(angle_dist(a.rect.angle, PI) < 1e-9);
         assert_eq!((a.rect.w, a.rect.h), (30.0, 10.0));
+    }
+
+    fn decoded(s: &str) -> Vec<ctc::DecodedChar> {
+        s.chars()
+            .enumerate()
+            .map(|(i, c)| ctc::DecodedChar {
+                text: c.to_string(),
+                step: i * 3,
+                prob: 0.9,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn cjk_line_detection() {
+        assert!(mostly_cjk(&decoded("第三季度总收为千百万元。")));
+        assert!(mostly_cjk(&decoded("2024年第三季度")));
+        assert!(mostly_cjk(&decoded("ひらがな カタカナ")));
+        assert!(mostly_cjk(&decoded("한국어 텍스트")));
+        // Latin lines, including one with a stray ideograph, stay Latin.
+        assert!(!mostly_cjk(&decoded("Façade naïve coöperate")));
+        assert!(!mostly_cjk(&decoded("Total revenue 中 was up")));
+        assert!(!mostly_cjk(&decoded("")));
+        assert!(!mostly_cjk(&decoded("   ")));
     }
 
     #[test]

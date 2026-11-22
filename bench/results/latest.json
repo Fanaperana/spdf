@@ -1,6 +1,6 @@
 {
- "timestamp": "2026-11-22T19:17:44+00:00",
- "commit": "9868775+dirty",
+ "timestamp": "2026-11-22T19:53:16+00:00",
+ "commit": "09c464f+dirty",
  "odl_limit": null,
  "versions": {
   "spdf": "spdf 0.2.0-alpha.2",
@@ -16,9 +16,9 @@
     "nid_s": 0.924064438908899,
     "teds": 0.835073841583411,
     "mhs": 0.8376627457659963,
-    "sec_per_doc": 0.04974625899922103,
-    "sec_median": 0.048437099903821945,
-    "peak_rss_mb": 24.850432,
+    "sec_per_doc": 0.0448126359959133,
+    "sec_median": 0.04821989987976849,
+    "peak_rss_mb": 28.7744,
     "failures": 0,
     "per_doc": {
      "01030000000001": {
@@ -1226,7 +1226,7 @@
    "edge": {
     "cases": {
      "arabic_rtl": {
-      "wall": 0.02653819997794926,
+      "wall": 0.029860799899324775,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1238,7 +1238,7 @@
       "score": 1.0
      },
      "cjk_chinese": {
-      "wall": 0.02571319998241961,
+      "wall": 0.026193700032308698,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1250,7 +1250,7 @@
       "score": 1.0
      },
      "corrupt_bad_xref": {
-      "wall": 0.045046799816191196,
+      "wall": 0.02509690006263554,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1264,7 +1264,7 @@
       "score": 1.0
      },
      "corrupt_no_xref": {
-      "wall": 0.025161599973216653,
+      "wall": 0.025139600038528442,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1278,7 +1278,7 @@
       "score": 1.0
      },
      "corrupt_truncated": {
-      "wall": 0.025601400062441826,
+      "wall": 0.026035099988803267,
       "peak_rss_mb": 2.06848,
       "rc": 1,
       "timed_out": false,
@@ -1293,8 +1293,8 @@
       "stderr_tail": "Error: PDF parse error: load_pdf_from_byte_slice: PdfiumLibraryInternalError(FormatError)\n"
      },
      "diacritics": {
-      "wall": 0.025430399924516678,
-      "peak_rss_mb": 2.06848,
+      "wall": 0.026146499905735254,
+      "peak_rss_mb": 2.064384,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1305,7 +1305,7 @@
       "score": 1.0
      },
      "empty_pages": {
-      "wall": 0.025533099891617894,
+      "wall": 0.025738699827343225,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1317,7 +1317,7 @@
       "score": 1.0
      },
      "encrypted_owner_only": {
-      "wall": 0.04545269999653101,
+      "wall": 0.04601690010167658,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1329,7 +1329,7 @@
       "score": 1.0
      },
      "encrypted_user_pw": {
-      "wall": 0.04450009996071458,
+      "wall": 0.04624130018055439,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1341,7 +1341,7 @@
       "score": 1.0
      },
      "faux_bold": {
-      "wall": 0.043477100087329745,
+      "wall": 0.02573560015298426,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1353,7 +1353,7 @@
       "score": 1.0
      },
      "form_fields": {
-      "wall": 0.02534739999100566,
+      "wall": 0.04476879979483783,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1365,7 +1365,7 @@
       "score": 1.0
      },
      "garbage_bytes": {
-      "wall": 0.02631029998883605,
+      "wall": 0.026315399911254644,
       "peak_rss_mb": 2.06848,
       "rc": 1,
       "timed_out": false,
@@ -1376,8 +1376,8 @@
       "stderr_tail": "Error: PDF parse error: load_pdf_from_byte_slice: PdfiumLibraryInternalError(FormatError)\n"
      },
      "headers_footers": {
-      "wall": 0.03427279996685684,
-      "peak_rss_mb": 0.0,
+      "wall": 0.028569099958986044,
+      "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1388,8 +1388,8 @@
       "score": 1.0
      },
      "hebrew_rtl": {
-      "wall": 0.034931999864056706,
-      "peak_rss_mb": 0.0,
+      "wall": 0.02659639995545149,
+      "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1400,7 +1400,7 @@
       "score": 1.0
      },
      "html_named_pdf": {
-      "wall": 0.02605280000716448,
+      "wall": 0.027680099941790104,
       "peak_rss_mb": 2.06848,
       "rc": 1,
       "timed_out": false,
@@ -1411,8 +1411,8 @@
       "stderr_tail": "Error: PDF parse error: load_pdf_from_byte_slice: PdfiumLibraryInternalError(FormatError)\n"
      },
      "invisible_ocr_layer": {
-      "wall": 0.026121099945157766,
-      "peak_rss_mb": 2.064384,
+      "wall": 0.027628399897366762,
+      "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1423,7 +1423,7 @@
       "score": 1.0
      },
      "japanese": {
-      "wall": 0.0266958000138402,
+      "wall": 0.026362599804997444,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1435,8 +1435,8 @@
       "score": 1.0
      },
      "justified": {
-      "wall": 0.03634179988875985,
-      "peak_rss_mb": 0.0,
+      "wall": 0.025494000175967813,
+      "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1447,7 +1447,7 @@
       "score": 1.0
      },
      "korean": {
-      "wall": 0.02600479987449944,
+      "wall": 0.025395500008016825,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1459,7 +1459,7 @@
       "score": 1.0
      },
      "landscape_wide": {
-      "wall": 0.048046700190752745,
+      "wall": 0.025487500010058284,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1471,7 +1471,7 @@
       "score": 1.0
      },
      "letter_spaced": {
-      "wall": 0.02632830012589693,
+      "wall": 0.02532980008982122,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1483,7 +1483,7 @@
       "score": 1.0
      },
      "ligatures": {
-      "wall": 0.025240799877792597,
+      "wall": 0.026530599920079112,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1495,7 +1495,7 @@
       "score": 1.0
      },
      "mixed_page_sizes": {
-      "wall": 0.025332899997010827,
+      "wall": 0.025398100027814507,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1507,8 +1507,8 @@
       "score": 1.0
      },
      "no_tounicode": {
-      "wall": 0.024752900004386902,
-      "peak_rss_mb": 2.06848,
+      "wall": 0.025489300023764372,
+      "peak_rss_mb": 2.064384,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1519,7 +1519,7 @@
       "score": 1.0
      },
      "rotated_page_180": {
-      "wall": 0.026962000178173184,
+      "wall": 0.025685800006613135,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1531,7 +1531,7 @@
       "score": 1.0
      },
      "rotated_page_270": {
-      "wall": 0.02543569984845817,
+      "wall": 0.025224200217053294,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1543,8 +1543,8 @@
       "score": 1.0
      },
      "rotated_page_90": {
-      "wall": 0.036039500031620264,
-      "peak_rss_mb": 0.0,
+      "wall": 0.02551750000566244,
+      "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1555,8 +1555,8 @@
       "score": 1.0
      },
      "rotated_text": {
-      "wall": 0.0331258000805974,
-      "peak_rss_mb": 0.0,
+      "wall": 0.04485630011186004,
+      "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1567,8 +1567,8 @@
       "score": 1.0
      },
      "scanned": {
-      "wall": 2.072641500039026,
-      "peak_rss_mb": 302.493696,
+      "wall": 2.5767522999085486,
+      "peak_rss_mb": 317.48096,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1576,13 +1576,13 @@
       "tags": [
        "ocr"
       ],
-      "nid": 0.9988974641675854,
-      "f1": 0.9852941176470589,
-      "score": 0.9988974641675854
+      "nid": 1.0,
+      "f1": 1.0,
+      "score": 1.0
      },
      "scanned_chinese": {
-      "wall": 1.1335416999645531,
-      "peak_rss_mb": 292.446208,
+      "wall": 2.176014699973166,
+      "peak_rss_mb": 550.17472,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1591,13 +1591,13 @@
        "ocr",
        "cjk"
       ],
-      "nid": 0.9425287356321839,
-      "f1": 0.3333333333333333,
-      "score": 0.9425287356321839
+      "nid": 1.0,
+      "f1": 1.0,
+      "score": 1.0
      },
      "scanned_lowdpi": {
-      "wall": 2.1257541000377387,
-      "peak_rss_mb": 301.441024,
+      "wall": 2.5187130998820066,
+      "peak_rss_mb": 316.010496,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1605,13 +1605,13 @@
       "tags": [
        "ocr"
       ],
-      "nid": 0.9988974641675854,
-      "f1": 0.9777777777777777,
-      "score": 0.9988974641675854
+      "nid": 1.0,
+      "f1": 1.0,
+      "score": 1.0
      },
      "scanned_mixed_pages": {
-      "wall": 1.3796165001112968,
-      "peak_rss_mb": 296.48896,
+      "wall": 1.7680097999982536,
+      "peak_rss_mb": 306.262016,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1625,8 +1625,8 @@
       "score": 1.0
      },
      "scanned_multilang": {
-      "wall": 1.229818700114265,
-      "peak_rss_mb": 293.224448,
+      "wall": 1.332807500148192,
+      "peak_rss_mb": 303.976448,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1635,13 +1635,13 @@
        "ocr",
        "latin-ext"
       ],
-      "nid": 0.8811881188118812,
-      "f1": 0.3888888888888889,
-      "score": 0.8811881188118812
+      "nid": 0.9154228855721394,
+      "f1": 0.5555555555555556,
+      "score": 0.9154228855721394
      },
      "scanned_noisy_jpeg": {
-      "wall": 1.781305800192058,
-      "peak_rss_mb": 309.108736,
+      "wall": 2.1945380000397563,
+      "peak_rss_mb": 328.421376,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1654,8 +1654,8 @@
       "score": 1.0
      },
      "scanned_rotated_90": {
-      "wall": 2.14182520005852,
-      "peak_rss_mb": 301.498368,
+      "wall": 2.545527100097388,
+      "peak_rss_mb": 326.20544,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1669,8 +1669,8 @@
       "score": 1.0
      },
      "scanned_skewed": {
-      "wall": 2.173947599949315,
-      "peak_rss_mb": 315.142144,
+      "wall": 3.024080399889499,
+      "peak_rss_mb": 347.316224,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1683,8 +1683,8 @@
       "score": 1.0
      },
      "scanned_table": {
-      "wall": 1.4679777999408543,
-      "peak_rss_mb": 293.306368,
+      "wall": 1.8047786999959499,
+      "peak_rss_mb": 305.762304,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1698,8 +1698,8 @@
       "score": 1.0
      },
      "simple": {
-      "wall": 0.037787700071930885,
-      "peak_rss_mb": 0.0,
+      "wall": 0.026171900099143386,
+      "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1710,8 +1710,8 @@
       "score": 1.0
      },
      "table_bordered": {
-      "wall": 0.03436249983496964,
-      "peak_rss_mb": 0.0,
+      "wall": 0.025052699958905578,
+      "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1722,7 +1722,7 @@
       "score": 1.0
      },
      "table_borderless": {
-      "wall": 0.025245700031518936,
+      "wall": 0.026284199906513095,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1734,7 +1734,7 @@
       "score": 1.0
      },
      "table_sparse": {
-      "wall": 0.02502740011550486,
+      "wall": 0.0467121999245137,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1746,7 +1746,7 @@
       "score": 1.0
      },
      "three_column": {
-      "wall": 0.025599000044167042,
+      "wall": 0.02589259995147586,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1758,7 +1758,7 @@
       "score": 1.0
      },
      "two_column": {
-      "wall": 0.025673900032415986,
+      "wall": 0.025750899920240045,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1770,7 +1770,7 @@
       "score": 1.0
      },
      "zero_bytes": {
-      "wall": 0.025416300166398287,
+      "wall": 0.027828100137412548,
       "peak_rss_mb": 2.06848,
       "rc": 1,
       "timed_out": false,
@@ -1781,8 +1781,8 @@
       "stderr_tail": "Error: PDF parse error: load_pdf_from_byte_slice: PdfiumLibraryInternalError(FormatError)\n"
      },
      "huge_400_pages": {
-      "wall": 0.18957779998891056,
-      "peak_rss_mb": 15.95392,
+      "wall": 0.19485770002938807,
+      "peak_rss_mb": 16.539648,
       "rc": 0,
       "timed_out": false,
       "panic": false,
@@ -1795,7 +1795,7 @@
       "score": 1.0
      },
      "tiny_and_huge_text": {
-      "wall": 0.03057839977554977,
+      "wall": 0.02686430001631379,
       "peak_rss_mb": 2.06848,
       "rc": 0,
       "timed_out": false,
@@ -1807,13 +1807,13 @@
       "score": 1.0
      }
     },
-    "nid_mean": 0.9725932972739356,
-    "f1_mean": 0.9461696306429549,
-    "ocr_nid_mean": 0.9801679758643596,
+    "nid_mean": 0.9747772764086544,
+    "f1_mean": 0.9664082687338502,
+    "ocr_nid_mean": 0.9906025428413489,
     "robust_pass": 1.0,
-    "huge_sec": 0.18957779998891056,
-    "huge_rss_mb": 15.95392,
-    "edge_sec_total": 16.791495600016788
+    "huge_sec": 0.19485770002938807,
+    "huge_rss_mb": 16.539648,
+    "edge_sec_total": 21.177170699927956
    }
   },
   "liteparse": {
@@ -3626,5 +3626,5 @@
    }
   }
  },
- "liteparse_reused_from": "8d91e92+dirty"
+ "liteparse_reused_from": "9868775+dirty"
 }

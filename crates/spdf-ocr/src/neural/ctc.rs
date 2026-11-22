@@ -23,6 +23,11 @@ impl Charset {
         self.chars.len() + 1
     }
 
+    /// True when the recogniser can emit `text` at all.
+    pub fn contains(&self, text: &str) -> bool {
+        self.chars.iter().any(|c| c == text)
+    }
+
     fn get(&self, class: usize) -> Option<&str> {
         class
             .checked_sub(1)
@@ -146,6 +151,96 @@ pub fn group_runs(words: &[Word], max_gap: f64) -> Vec<Word> {
     runs
 }
 
+/// Largest timestep offset at which two recognisers' characters can still
+/// be the same glyph (both models share the stride-8 time axis but place
+/// their CTC spikes a step or two apart).
+const FUSE_STEP_TOL: usize = 2;
+
+/// Fuse the greedy decodes of two recognisers run on the *same* crop:
+/// `a` from the primary model (charset `ca`), `b` from a specialist
+/// (charset `cb`, e.g. the Latin model with accented letters the primary
+/// dictionary lacks).
+///
+/// The two character sequences are aligned by edit distance, pairing only
+/// characters whose timesteps are within [`FUSE_STEP_TOL`]. Then:
+/// - agreeing characters are kept;
+/// - on a disagreement, a glyph the *other* model cannot express at all
+///   wins (that model was forced to its nearest base letter: `ï` vs `i`,
+///   `Ø` vs `O`), otherwise the more confident one;
+/// - a character only one model emitted is kept when it is confident
+///   (≥ 0.5): the other model typically blanked a glyph missing from its
+///   dictionary (`ệ` → nothing) or dropped a doubled letter.
+pub fn fuse(a: &[DecodedChar], b: &[DecodedChar], ca: &Charset, cb: &Charset) -> Vec<DecodedChar> {
+    let (n, m) = (a.len(), b.len());
+    let w = m + 1;
+    let mut cost = vec![u32::MAX; (n + 1) * w];
+    // 0 = diagonal, 1 = from a only, 2 = from b only.
+    let mut from = vec![0u8; (n + 1) * w];
+    cost[0] = 0;
+    for i in 0..=n {
+        for j in 0..=m {
+            let c = cost[i * w + j];
+            if c == u32::MAX {
+                continue;
+            }
+            let mut relax = |k: usize, v: u32, op: u8| {
+                if v < cost[k] {
+                    cost[k] = v;
+                    from[k] = op;
+                }
+            };
+            if i < n {
+                relax((i + 1) * w + j, c + 1, 1);
+            }
+            if j < m {
+                relax(i * w + j + 1, c + 1, 2);
+            }
+            if i < n && j < m && a[i].step.abs_diff(b[j].step) <= FUSE_STEP_TOL {
+                let sub = u32::from(a[i].text != b[j].text);
+                relax((i + 1) * w + j + 1, c + sub, 0);
+            }
+        }
+    }
+    let mut out = Vec::with_capacity(n.max(m));
+    let (mut i, mut j) = (n, m);
+    while i > 0 || j > 0 {
+        match from[i * w + j] {
+            0 => {
+                let (x, y) = (&a[i - 1], &b[j - 1]);
+                // A confident glyph outside the other model's dictionary.
+                let y_only = !ca.contains(&y.text) && y.prob >= 0.4;
+                let x_only = !cb.contains(&x.text) && x.prob >= 0.4;
+                let pick = if x.text == y.text {
+                    x
+                } else if y_only {
+                    y
+                } else if x_only || x.prob >= y.prob {
+                    x
+                } else {
+                    y
+                };
+                out.push(pick.clone());
+                i -= 1;
+                j -= 1;
+            }
+            1 => {
+                if a[i - 1].prob >= 0.5 {
+                    out.push(a[i - 1].clone());
+                }
+                i -= 1;
+            }
+            _ => {
+                if b[j - 1].prob >= 0.5 {
+                    out.push(b[j - 1].clone());
+                }
+                j -= 1;
+            }
+        }
+    }
+    out.reverse();
+    out
+}
+
 /// Mean probability of the emitted characters (0 when nothing decoded).
 pub fn line_confidence(chars: &[DecodedChar]) -> f64 {
     if chars.is_empty() {
@@ -219,6 +314,78 @@ mod tests {
         assert_eq!(texts, ["North", "5,405 a b"]);
         assert_eq!((runs[1].start, runs[1].end), (0.4, 0.6));
         assert!(group_runs(&[], 0.1).is_empty());
+    }
+
+    fn dec(s: &str, steps: &[usize], probs: &[f32]) -> Vec<DecodedChar> {
+        s.chars()
+            .zip(steps)
+            .zip(probs)
+            .map(|((c, &step), &prob)| DecodedChar {
+                text: c.to_string(),
+                step,
+                prob,
+            })
+            .collect()
+    }
+
+    fn text(d: &[DecodedChar]) -> String {
+        d.iter().map(|c| c.text.as_str()).collect()
+    }
+
+    #[test]
+    fn fuse_prefers_glyphs_the_other_model_cannot_emit() {
+        let primary = Charset::from_dict(
+            "n
+a
+i
+v
+e",
+        );
+        let latin = Charset::from_dict(
+            "n
+a
+i
+v
+e
+ï",
+        );
+        // Primary is sure of `i` (it has no `ï`); Latin says `ï` at 0.79.
+        let a = dec("naive", &[0, 3, 6, 9, 12], &[0.9, 0.9, 1.0, 0.9, 0.9]);
+        let b = dec("naïve", &[0, 3, 7, 9, 12], &[0.9, 0.9, 0.79, 0.9, 0.9]);
+        assert_eq!(text(&fuse(&a, &b, &primary, &latin)), "naïve");
+        // Shared glyphs: the more confident model wins.
+        let b = dec("nave", &[0, 3, 9, 12], &[0.9, 0.9, 0.9, 0.9]);
+        let a2 = dec("ncive", &[0, 3, 6, 9, 12], &[0.9, 0.3, 0.9, 0.9, 0.9]);
+        let b2 = dec("naive", &[0, 4, 6, 9, 12], &[0.9, 0.8, 0.9, 0.9, 0.9]);
+        let both = Charset::from_dict(
+            "n
+a
+c
+i
+v
+e",
+        );
+        assert_eq!(text(&fuse(&a2, &b2, &both, &both)), "naive");
+        // A confident character only one model saw is kept.
+        assert_eq!(text(&fuse(&a, &b, &primary, &latin)), "naive");
+    }
+
+    #[test]
+    fn fuse_keeps_confident_one_sided_chars_and_drops_weak_ones() {
+        let cs = Charset::from_dict(
+            "b
+i
+l
+s",
+        );
+        let a = dec("bils", &[0, 4, 8, 14], &[0.9, 0.9, 0.9, 0.9]);
+        let b = dec("bills", &[0, 4, 8, 11, 14], &[0.9, 0.9, 0.9, 1.0, 0.9]);
+        assert_eq!(text(&fuse(&a, &b, &cs, &cs)), "bills");
+        let b = dec("bills", &[0, 4, 8, 11, 14], &[0.9, 0.9, 0.9, 0.3, 0.9]);
+        assert_eq!(text(&fuse(&a, &b, &cs, &cs)), "bils");
+        // Far-apart characters never pair up, and empty inputs are fine.
+        assert!(fuse(&[], &[], &cs, &cs).is_empty());
+        assert_eq!(text(&fuse(&a, &[], &cs, &cs)), "bils");
     }
 
     #[test]

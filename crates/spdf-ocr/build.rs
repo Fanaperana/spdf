@@ -2,7 +2,8 @@
 //!
 //! With the `neural` feature on, this fetches the pretrained PaddleOCR
 //! PP-OCRv5 mobile text detection (DBNet) and recognition (SVTR-LCNet, CTC)
-//! ONNX models, verifies them by SHA-256, and turns them into native Burn code
+//! ONNX models, plus the PP-OCRv5 server recogniser used for CJK lines and the
+//! Latin recogniser fused in on Latin-script lines,, verifies them by SHA-256, and turns them into native Burn code
 //! with `burn-onnx`. The weights end up embedded in the final binary, so a
 //! plain `cargo build` produces a self-contained OCR engine: no Python, no
 //! ONNX runtime, no system Tesseract.
@@ -47,6 +48,27 @@ mod neural {
             "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/master/paddle/PP-OCRv5/rec/ch_PP-OCRv5_rec_mobile/ppocrv5_dict.txt",
             "d1979e9f794c464c0d2e0b70a7fe14dd978e9dc644c0e71f14158cdf8342af1b",
         ),
+        // Larger PP-OCRv5 server recogniser (PP-HGNetV2), same dictionary.
+        // Only used to re-read lines the mobile model decoded as CJK, where
+        // the mobile model drops simple glyphs (一, 二, 入, 几).
+        (
+            "ch_PP-OCRv5_rec_server.onnx",
+            "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/master/onnx/PP-OCRv5/rec/ch_PP-OCRv5_rec_server.onnx",
+            "e09385400eaaaef34ceff54aeb7c4f0f1fe014c27fa8b9905d4709b65746562a",
+        ),
+        // PP-OCRv5 Latin recogniser + dictionary: accented Latin letters
+        // (ï, Ø, Ł, ź, ...) the Chinese dictionary lacks. Fused with the
+        // primary decode on non-CJK lines.
+        (
+            "latin_PP-OCRv5_rec_mobile.onnx",
+            "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/master/onnx/PP-OCRv5/rec/latin_PP-OCRv5_rec_mobile.onnx",
+            "b20bd37c168a570f583afbc8cd7925603890efbcdc000a59e22c269d160b5f5a",
+        ),
+        (
+            "ppocrv5_latin_dict.txt",
+            "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/master/paddle/PP-OCRv5/rec/latin_PP-OCRv5_rec_mobile/ppocrv5_latin_dict.txt",
+            "3c0a8a79b612653c25f765271714f71281e4e955962c153e272b7b8c1d2b13ff",
+        ),
     ];
 
     pub fn run() {
@@ -61,17 +83,20 @@ mod neural {
             Ok(dir) => {
                 let det = dir.join(MODELS[0].0);
                 let rec = dir.join(MODELS[1].0);
+                let rec_server = dir.join(MODELS[3].0);
+                let rec_latin = dir.join(MODELS[4].0);
                 burn_onnx::ModelGen::new()
                     .input(det.to_str().expect("utf-8 model path"))
                     .input(rec.to_str().expect("utf-8 model path"))
+                    .input(rec_server.to_str().expect("utf-8 model path"))
+                    .input(rec_latin.to_str().expect("utf-8 model path"))
                     .out_dir("model/")
                     .load_strategy(burn_onnx::LoadStrategy::Bytes)
                     .run_from_script();
-                fs::copy(
-                    dir.join(MODELS[2].0),
-                    out_dir.join("model").join(MODELS[2].0),
-                )
-                .expect("copy OCR dictionary");
+                for dict in [MODELS[2].0, MODELS[5].0] {
+                    fs::copy(dir.join(dict), out_dir.join("model").join(dict))
+                        .expect("copy OCR dictionary");
+                }
                 println!("cargo:rustc-cfg=spdf_neural_models");
             }
             Err(e) => {
