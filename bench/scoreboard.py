@@ -17,7 +17,9 @@ RESULTS = BENCH / "results"
 
 # (metric path, direction, tie tolerance, regression tolerance)
 #   direction: +1 higher is better, -1 lower is better
-#   tolerances on "rel:" are relative (fraction), otherwise absolute
+#   tolerances are absolute numbers, or "rel:<fraction>[:<absolute floor>]" -> max(fraction*ref, floor)
+SEC_TIE, MB_TIE = "rel:0.03:0.005", "rel:0.03:1"      # within this band vs LiteParse = tie
+SEC_REG, MB_REG = "rel:0.07:0.01", "rel:0.07:3"       # spdf may not get worse than this run-to-run
 HEADLINE = [
     ("odl.overall", +1, 0.0005, 0.002),
     ("odl.nid", +1, 0.0005, 0.002),
@@ -25,17 +27,43 @@ HEADLINE = [
     ("odl.teds", +1, 0.0005, 0.003),
     ("odl.mhs", +1, 0.0005, 0.003),
     ("odl.failures", -1, 0, 0),
-    ("odl.sec_per_doc", -1, "rel:0.03", "rel:0.20"),
-    ("odl.peak_rss_mb", -1, "rel:0.03", "rel:0.20"),
+    ("odl.sec_per_doc", -1, SEC_TIE, SEC_REG),
+    ("odl.sec_median", -1, SEC_TIE, SEC_REG),
+    ("odl.sec_p95", -1, SEC_TIE, SEC_REG),
+    ("odl.peak_rss_mb", -1, MB_TIE, MB_REG),
+    ("odl.rss_mean_mb", -1, MB_TIE, MB_REG),
     ("edge.nid_mean", +1, 0.0005, 0.002),
     ("edge.f1_mean", +1, 0.0005, 0.002),
     ("edge.ocr_nid_mean", +1, 0.0005, 0.002),
     ("edge.robust_pass", +1, 0, 0),
-    ("edge.huge_sec", -1, "rel:0.03", "rel:0.25"),
-    ("edge.huge_rss_mb", -1, "rel:0.03", "rel:0.25"),
+    ("edge.total_sec", -1, SEC_TIE, SEC_REG),
+    ("edge.max_rss_mb", -1, MB_TIE, MB_REG),
+    ("edge.rss_mean_mb", -1, MB_TIE, MB_REG),
+    ("edge.ocr_sec_mean", -1, SEC_TIE, SEC_REG),
+    ("edge.ocr_sec_max", -1, SEC_TIE, SEC_REG),
+    ("edge.ocr_rss_mean_mb", -1, MB_TIE, MB_REG),
+    ("edge.ocr_rss_max_mb", -1, MB_TIE, MB_REG),
+    ("edge.huge_sec", -1, SEC_TIE, SEC_REG),
+    ("edge.huge_rss_mb", -1, MB_TIE, MB_REG),
 ]
 CASE_TIE, CASE_REG = 0.005, 0.01
-HEADLINE_MUST_WIN = ["odl.overall", "odl.nid", "odl.teds", "odl.mhs", "edge.nid_mean", "edge.f1_mean", "edge.ocr_nid_mean"]
+# per-case latency/memory: no losses allowed vs LiteParse (ties within the band are ok);
+# a looser regression band because single small documents are noisier than aggregates
+CASE_SEC_TIE, CASE_SEC_REG = "rel:0.03:0.01", "rel:0.15:0.03"
+CASE_MB_TIE, CASE_MB_REG = "rel:0.03:2", "rel:0.15:5"
+PERF_SUFFIXES = ("sec_per_doc", "sec_median", "sec_p95", "total_sec", "sec_mean", "sec_max", "huge_sec",
+                 "rss_mb", "rss_mean_mb", "rss_max_mb", ".sec", ".rss_mb")
+HEADLINE_MUST_WIN = ["odl.overall", "odl.nid", "odl.teds", "odl.mhs", "edge.nid_mean", "edge.f1_mean",
+                     "edge.ocr_nid_mean",
+                     # speed + memory: owner decision 2026-11-22 - spdf must strictly beat LiteParse here too
+                     "odl.sec_per_doc", "odl.sec_median", "odl.sec_p95", "odl.peak_rss_mb", "odl.rss_mean_mb",
+                     "edge.total_sec", "edge.max_rss_mb", "edge.rss_mean_mb", "edge.ocr_sec_mean",
+                     "edge.ocr_sec_max", "edge.ocr_rss_mean_mb", "edge.ocr_rss_max_mb",
+                     "edge.huge_sec", "edge.huge_rss_mb"]
+
+
+def is_perf(name: str) -> bool:
+    return name.endswith(PERF_SUFFIXES)
 
 
 def get(d: dict, path: str):
@@ -48,7 +76,9 @@ def get(d: dict, path: str):
 
 def _tol(t, ref):
     if isinstance(t, str) and t.startswith("rel:"):
-        return abs(ref or 0) * float(t[4:])
+        parts = t[4:].split(":")
+        floor = float(parts[1]) if len(parts) > 1 else 0.0
+        return max(abs(ref or 0) * float(parts[0]), floor)
     return t
 
 
@@ -61,6 +91,12 @@ def metric_rows(run: dict):
     for c in cases:
         p = f"edge.cases.{c}.score"
         yield f"edge.case.{c}", get(s, p), get(l, p), +1, CASE_TIE, CASE_REG
+    for c in cases:
+        p = f"edge.cases.{c}.wall"
+        yield f"edge.case.{c}.sec", get(s, p), get(l, p), -1, CASE_SEC_TIE, CASE_SEC_REG
+    for c in cases:
+        p = f"edge.cases.{c}.peak_rss_mb"
+        yield f"edge.case.{c}.rss_mb", get(s, p), get(l, p), -1, CASE_MB_TIE, CASE_MB_REG
 
 
 def compare_engines(run: dict) -> dict:
@@ -100,10 +136,13 @@ def render_console(cmp: dict) -> str:
 
 
 def gate(baseline: dict, cand: dict) -> tuple[bool, list[str], list[str]]:
-    """Return (ok, regressions, improvements) for spdf between two runs."""
+    """Return (ok, regressions, improvements) for spdf between two runs.
+
+    Accuracy and speed/memory are gated the same way: any metric worse than its regression band
+    blocks the commit (no trading latency for accuracy or vice versa). Speed/memory gains only
+    count as improvements when they are outside the noise band."""
     regs, imps = [], []
     b_rows = {n: (sv, d, tie, reg) for n, sv, _, d, tie, reg in metric_rows(baseline)}
-    cand_status = {r["metric"]: r["status"] for r in compare_engines(cand)["rows"]}
     for n, cv, _, d, tie, reg in metric_rows(cand):
         if n not in b_rows:
             continue
@@ -113,22 +152,11 @@ def gate(baseline: dict, cand: dict) -> tuple[bool, list[str], list[str]]:
                 regs.append(f"{n}: missing in candidate")
             continue
         delta = (cv - bv) * d
-        perf = n.endswith(("sec_per_doc", "huge_sec", "rss_mb"))
         if delta < -_tol(reg, bv):
-            if perf and cand_status.get(n) == "win":
-                # speed/memory headroom may be spent on accuracy as long as spdf still
-                # beats LiteParse on that metric; it is reported, not blocking
-                imps.append(f"(perf cost, still ahead of LiteParse) {n}: {fmt(bv)} -> {fmt(cv)}")
-                continue
             regs.append(f"{n}: {fmt(bv)} -> {fmt(cv)}")
-        elif delta > _tol(tie, bv) and not n.endswith(("sec_per_doc", "huge_sec", "rss_mb")):
+        elif delta > _tol(reg if is_perf(n) else tie, bv):
             imps.append(f"{n}: {fmt(bv)} -> {fmt(cv)}")
-        elif delta > _tol(reg, bv):  # speed/memory only count when clearly outside noise
-            imps.append(f"{n}: {fmt(bv)} -> {fmt(cv)}")
-    real = [i for i in imps if not i.startswith("(perf cost")]
-    notes = [i for i in imps if i.startswith("(perf cost")]
-    # perf-cost notes ride along with real improvements but never count as one on their own
-    return (not regs), regs, (real + notes) if real else []
+    return (not regs), regs, imps
 
 
 def render_md(run: dict, cmp: dict, history: list[dict]) -> str:
@@ -145,8 +173,8 @@ def render_md(run: dict, cmp: dict, history: list[dict]) -> str:
         f"- spdf output format on odl: `{get(run, 'engines.spdf.odl.format')}`; LiteParse: `markdown`.",
         "",
         f"**Wins {cmp['wins']} · ties {cmp['ties']} · losses {cmp['losses']}** — "
-        + ("spdf beats LiteParse: no losses on any tracked metric and wins on every headline accuracy metric."
-           if cmp["beats_liteparse"] else "spdf does not yet beat LiteParse (needs zero losses + wins on odl.overall/nid/teds/mhs and edge nid/f1/ocr)."),
+        + ("spdf beats LiteParse: no losses on any tracked metric and strict wins on every headline accuracy, latency and memory metric."
+           if cmp["beats_liteparse"] else "spdf does not yet beat LiteParse (needs zero losses + strict wins on every headline accuracy, latency and memory metric)."),
         "",
         "| metric | better | spdf | LiteParse | status |",
         "|---|---|---:|---:|---|",

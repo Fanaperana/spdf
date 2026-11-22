@@ -99,6 +99,48 @@ def engine_cmd(engine: str, pdf: Path, out: Path, fmt: str, ocr: bool, password:
     return cmd
 
 
+def _exact_peak_mb(proc: subprocess.Popen) -> float:
+    """Peak working set of the (exited) main process, read from its still-open handle.
+
+    Polling alone misses the peak of short-lived processes; on Windows the kernel keeps
+    PeakWorkingSetSize on the process object until the last handle closes."""
+    if os.name != "nt":
+        return 0.0
+    import ctypes
+    from ctypes import wintypes
+
+    class PMC(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+    c = PMC(); c.cb = ctypes.sizeof(PMC)
+    try:
+        ok = ctypes.WinDLL("psapi").GetProcessMemoryInfo(wintypes.HANDLE(int(proc._handle)), ctypes.byref(c), c.cb)
+    except Exception:
+        return 0.0
+    return c.PeakWorkingSetSize / 1e6 if ok else 0.0
+
+
+def run_repeated(cmd: list[str], repeats: int, timeout: float = TIMEOUT) -> dict:
+    """Run ``cmd`` ``repeats`` times; report the median wall time and median peak RSS."""
+    runs = []
+    for _ in range(max(1, repeats)):
+        r = run_measured(cmd, timeout)
+        runs.append(r)
+        if r["timed_out"]:
+            break  # do not burn 3x the timeout on a hanging input
+    out = dict(runs[-1])
+    out["wall"] = statistics.median(r["wall"] for r in runs)
+    out["peak_rss_mb"] = statistics.median(r["peak_rss_mb"] for r in runs)
+    out["timed_out"] = any(r["timed_out"] for r in runs)
+    out["panic"] = any(r["panic"] for r in runs)
+    out["rc"] = next((r["rc"] for r in runs if r["rc"] != 0), runs[-1]["rc"])
+    out["repeats"] = len(runs)
+    return out
+
+
 def run_measured(cmd: list[str], timeout: float = TIMEOUT) -> dict:
     """Run ``cmd``; return rc, wall seconds, peak RSS (MB, incl. children), stderr tail."""
     t0 = time.perf_counter()
@@ -112,7 +154,8 @@ def run_measured(cmd: list[str], timeout: float = TIMEOUT) -> dict:
     while proc.poll() is None:
         if ps is not None:
             try:
-                rss = ps.memory_info().rss + sum(c.memory_info().rss for c in ps.children(recursive=True))
+                mi = ps.memory_info()
+                rss = max(mi.rss, getattr(mi, "peak_wset", 0)) + sum(c.memory_info().rss for c in ps.children(recursive=True))
                 peak = max(peak, rss)
             except psutil.Error:
                 pass
@@ -125,9 +168,10 @@ def run_measured(cmd: list[str], timeout: float = TIMEOUT) -> dict:
                     pass
             proc.kill()
             break
-        time.sleep(0.005)
-    _, err = proc.communicate()
+        time.sleep(0.002)
     wall = time.perf_counter() - t0
+    _, err = proc.communicate()
+    peak = max(peak, _exact_peak_mb(proc) * 1e6)
     err_s = err.decode("utf-8", "replace")
     return {
         "rc": proc.returncode,
@@ -187,12 +231,30 @@ def run_parallel(jobs, workers):
         return list(ex.map(lambda j: j(), jobs))
 
 
-def suite_odl(engine: str, limit: int | None, refresh: bool, workers: int, ver: str) -> dict:
+def pct(values: list[float], q: float) -> float:
+    v = sorted(values)
+    if not v:
+        return 0.0
+    k = (len(v) - 1) * q
+    lo, hi = int(k), min(int(k) + 1, len(v) - 1)
+    return v[lo] + (v[hi] - v[lo]) * (k - lo)
+
+
+def warmup(engine: str, pdfs: list[Path], ocr: bool) -> None:
+    """One untimed run per warm-up file (OS file cache, shader/model caches) - same for both engines."""
+    tmp = CACHE / "warmup.out"
+    for pdf in pdfs:
+        if pdf.exists():
+            run_measured(engine_cmd(engine, pdf, tmp, "text", ocr=ocr, password=None))
+
+
+def suite_odl(engine: str, limit: int | None, refresh: bool, workers: int, ver: str, repeats: int) -> dict:
     sys.path.insert(0, str(ODL_DIR / "src"))
     from evaluator import _aggregate_document_scores, _evaluate_single_document  # type: ignore
 
     fmt = "markdown" if engine == "liteparse" or "markdown" in spdf_formats() else "text"
-    key = engine if engine == "spdf" else f"liteparse-{re.sub(r'[^0-9A-Za-z.]+', '_', ver)}"
+    # "-m2": measurement method v2 (median of N runs, exact peak working set); older caches are not comparable
+    key = engine if engine == "spdf" else f"liteparse-{re.sub(r'[^0-9A-Za-z.]+', '_', ver)}-m2-r{repeats}"
     pred_dir = CACHE / "odl-pred" / key
     md_dir = pred_dir / "markdown"
     timing_file = pred_dir / "timings.json"
@@ -207,8 +269,11 @@ def suite_odl(engine: str, limit: int | None, refresh: bool, workers: int, ver: 
 
     def job(pdf: Path):
         out = md_dir / f"{pdf.stem}.md"
-        r = run_measured(engine_cmd(engine, pdf, out, fmt, ocr=False, password=None))
+        r = run_repeated(engine_cmd(engine, pdf, out, fmt, ocr=False, password=None), repeats)
         return pdf.stem, r
+
+    if todo:
+        warmup(engine, todo[:2], ocr=False)
 
     for stem, r in run_parallel([lambda p=p: job(p) for p in todo], workers):
         timings[stem] = r
@@ -235,13 +300,16 @@ def suite_odl(engine: str, limit: int | None, refresh: bool, workers: int, ver: 
         "mhs": agg["mhs_mean"],
         "sec_per_doc": statistics.fmean(walls),
         "sec_median": statistics.median(walls),
+        "sec_p95": pct(walls, 0.95),
         "peak_rss_mb": max(x["peak_rss_mb"] for x in t),
+        "rss_mean_mb": statistics.fmean(x["peak_rss_mb"] for x in t),
+        "repeats": repeats,
         "failures": sum(1 for x in t if x["rc"] != 0 or x["timed_out"]),
         "per_doc": per_doc,
     }
 
 
-def suite_edge(engine: str, workers: int) -> dict:
+def suite_edge(engine: str, workers: int, repeats: int) -> dict:
     cases = sorted(EDGE_DIR.glob("*.json"))
     if not cases:
         raise SystemExit("edge corpus missing: run python bench/edge/make_corpus.py")
@@ -255,7 +323,7 @@ def suite_edge(engine: str, workers: int) -> dict:
         name = meta_path.stem
         pdf = meta_path.with_suffix(".pdf")
         out = out_dir / f"{name}.txt"
-        r = run_measured(engine_cmd(engine, pdf, out, "text", ocr=True, password=meta.get("password")), timeout=TIMEOUT)
+        r = run_repeated(engine_cmd(engine, pdf, out, "text", ocr=True, password=meta.get("password")), repeats, timeout=TIMEOUT)
         pred = out.read_text(encoding="utf-8", errors="replace") if out.exists() else ""
         res = {"wall": r["wall"], "peak_rss_mb": r["peak_rss_mb"], "rc": r["rc"],
                "timed_out": r["timed_out"], "panic": r["panic"], "kind": meta["kind"],
@@ -270,6 +338,7 @@ def suite_edge(engine: str, workers: int) -> dict:
             res["stderr_tail"] = r["stderr_tail"][-200:]
         return name, res
 
+    warmup(engine, [EDGE_DIR / "simple.pdf", EDGE_DIR / "scanned.pdf"], ocr=True)
     # the huge doc runs alone so its timing/memory is not polluted
     huge = [c for c in cases if "huge" in c.stem]
     rest = [c for c in cases if c not in huge]
@@ -280,6 +349,7 @@ def suite_edge(engine: str, workers: int) -> dict:
     text_cases = {k: v for k, v in results.items() if v["kind"] == "text"}
     robust = {k: v for k, v in results.items() if v["kind"] == "robust"}
     huge_r = next((v for k, v in results.items() if "huge" in k), None)
+    ocr_cases = [v for v in results.values() if "ocr" in v.get("tags", [])]
     return {
         "cases": results,
         "nid_mean": statistics.fmean(v["nid"] for v in text_cases.values()),
@@ -290,6 +360,14 @@ def suite_edge(engine: str, workers: int) -> dict:
         "huge_sec": huge_r["wall"] if huge_r else None,
         "huge_rss_mb": huge_r["peak_rss_mb"] if huge_r else None,
         "edge_sec_total": sum(v["wall"] for v in results.values()),
+        "total_sec": sum(v["wall"] for v in results.values()),
+        "max_rss_mb": max(v["peak_rss_mb"] for v in results.values()),
+        "rss_mean_mb": statistics.fmean(v["peak_rss_mb"] for v in results.values()),
+        "ocr_sec_mean": statistics.fmean(v["wall"] for v in ocr_cases) if ocr_cases else None,
+        "ocr_sec_max": max(v["wall"] for v in ocr_cases) if ocr_cases else None,
+        "ocr_rss_mean_mb": statistics.fmean(v["peak_rss_mb"] for v in ocr_cases) if ocr_cases else None,
+        "ocr_rss_max_mb": max(v["peak_rss_mb"] for v in ocr_cases) if ocr_cases else None,
+        "repeats": repeats,
     }
 
 
@@ -310,6 +388,7 @@ def main() -> int:
     ap.add_argument("--engines", default="spdf,liteparse")
     ap.add_argument("--odl-limit", type=int, default=None)
     ap.add_argument("--workers", type=int, default=1, help="parallel docs; >1 is faster but makes timings noisier")
+    ap.add_argument("--repeats", type=int, default=3, help="runs per document; median wall time and peak RSS are reported")
     ap.add_argument("--refresh-liteparse", action="store_true")
     ap.add_argument("--out", default=str(CACHE / "candidate.json"))
     ap.add_argument("--reuse-liteparse-from", default=str(BENCH / "results" / "latest.json"),
@@ -326,6 +405,8 @@ def main() -> int:
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "commit": git_head(),
         "odl_limit": args.odl_limit,
+        "repeats": args.repeats,
+        "measurement": "CLI, one process per document, median of N runs; peak RSS = max(polled RSS incl. children, exact PeakWorkingSetSize)",
         "versions": versions,
         "engines": {},
     }
@@ -334,14 +415,15 @@ def main() -> int:
         for s in suites:
             t0 = time.time()
             if s == "odl":
-                res["odl"] = suite_odl(eng, args.odl_limit, args.refresh_liteparse, args.workers, versions[eng])
+                res["odl"] = suite_odl(eng, args.odl_limit, args.refresh_liteparse, args.workers, versions[eng], args.repeats)
             elif s == "edge":
-                res["edge"] = suite_edge(eng, args.workers)
+                res["edge"] = suite_edge(eng, args.workers, args.repeats)
             print(f"[{eng}] {s} done in {time.time() - t0:.0f}s", file=sys.stderr)
         result["engines"][eng] = res
     if "liteparse" not in engines and Path(args.reuse_liteparse_from).exists():
         prev = json.loads(Path(args.reuse_liteparse_from).read_text(encoding="utf-8"))
-        if prev.get("odl_limit") == args.odl_limit and "liteparse" in prev.get("engines", {}):
+        if (prev.get("odl_limit") == args.odl_limit and prev.get("repeats") == args.repeats
+                and "liteparse" in prev.get("engines", {})):
             result["engines"]["liteparse"] = prev["engines"]["liteparse"]
             result["liteparse_reused_from"] = prev.get("commit")
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)

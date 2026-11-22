@@ -13,17 +13,35 @@ improvement-loop attempt (accepted or rejected) in `progress.jsonl`.
 | `edge` | `edge/make_corpus.py` → 48 generated PDFs: 2/3-column, bordered/borderless/sparse tables, page rotation 90/180/270, rotated text, CJK, Korean, Arabic/Hebrew RTL, diacritics, ligatures, tiny/huge text, headers/footers, faux-bold, justified, letter-spaced, invisible OCR layer, empty pages, mixed page sizes, AcroForm values, AES-256 user/owner passwords, stripped ToUnicode, truncated / missing / bogus xref, image-only scans (straight, skewed, 100 dpi, noisy JPEG, table, Chinese, accented Latin, rotated 90°, and a born-digital + scanned mixed document), a 400-page doc, and garbage / zero-byte / HTML-named-.pdf robustness inputs | per case NID + token F1 vs generator ground truth (robustness cases: 1 = exits in time without a crash); means, 400-page wall time + peak RSS |
 
 Both engines run through their CLIs, one process per document (`--no-ocr` on `odl`,
-default OCR on `edge`), timed with peak RSS sampled by psutil. LiteParse emits
-`--format markdown` on `odl`; spdf emits markdown when its CLI offers it, else text.
+default OCR on `edge`), so every number includes process start-up, model/engine load and
+teardown — the cost a user pays per file. Each document is run **3 times (median reported)**
+after one untimed warm-up run per suite for each engine (OS file cache, on-disk shader/model
+caches). Peak memory is the larger of polled RSS (incl. child processes) and the process's
+exact `PeakWorkingSetSize`, read from its handle after exit, so short runs are not under-counted.
+LiteParse emits `--format markdown` on `odl`; spdf emits markdown when its CLI offers it, else text.
 
-**Beating LiteParse** = zero losses on every tracked metric (ties allowed, e.g. both 1.0 on
-a robustness case) and strict wins on `odl.overall`, `odl.nid`, `odl.teds`, `odl.mhs`,
-`edge.nid_mean`, `edge.f1_mean`, `edge.ocr_nid_mean` (mean NID over the OCR-tagged scan cases). Tie bands: 0.0005 on aggregates, 0.005 per edge case, 3% on
-time/memory.
+OCR is not the same engine on both sides: LiteParse 2.19.0's default build uses bundled
+Tesseract (`tesseract-rs`, CPU); spdf uses PP-OCRv5 on Burn (GPU via wgpu, CPU fallback).
+The comparison is like-for-like at the level that matters to a user — same input, same CLI
+invocation, same default settings, same machine — not engine-for-engine.
 
-**Regression gate** (used by the improvement loop before every commit): no spdf metric may drop by
-more than 0.002 on aggregates (0.003 TEDS/MHS), 0.01 on any edge case, or 20–25% on time/memory —
-except that a time/memory cost is tolerated while spdf still beats LiteParse on that metric.
+**Beating LiteParse** = zero losses on every tracked metric (ties allowed within the band, e.g.
+both 1.0 on a robustness case) and strict wins on every headline metric:
+
+- accuracy: `odl.overall/nid/teds/mhs`, `edge.nid_mean`, `edge.f1_mean`, `edge.ocr_nid_mean`
+- latency: `odl.sec_per_doc` (mean), `odl.sec_median`, `odl.sec_p95`, `edge.total_sec`,
+  `edge.ocr_sec_mean`, `edge.ocr_sec_max`, `edge.huge_sec`
+- memory: `odl.peak_rss_mb`, `odl.rss_mean_mb`, `edge.max_rss_mb`, `edge.rss_mean_mb`,
+  `edge.ocr_rss_mean_mb`, `edge.ocr_rss_max_mb`, `edge.huge_rss_mb`
+
+Every edge case is also tracked individually for score, wall time (`edge.case.<name>.sec`) and
+peak RSS (`edge.case.<name>.rss_mb`); none may lose. Tie bands vs LiteParse: 0.0005 on accuracy
+aggregates, 0.005 per case score, 3% on time/memory (floors 5 ms / 1 MB; per case 10 ms / 2 MB).
+
+**Regression gate** (used by the improvement loop before every commit): no spdf metric may get
+worse than its band — 0.002 on accuracy aggregates (0.003 TEDS/MHS), 0.01 on a case score, 7% on
+latency/memory aggregates (floors 10 ms / 3 MB) and 15% per case (floors 30 ms / 5 MB). Accuracy
+can't be bought with latency or memory, and vice versa.
 
 ## Run
 
