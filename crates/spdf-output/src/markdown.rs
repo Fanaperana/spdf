@@ -440,7 +440,78 @@ fn continues_paragraph(prev_body: Option<&str>, text: &str) -> bool {
 }
 
 fn plausible_heading(text: &str) -> bool {
-    !is_caption(text) && !is_run_in(text) && sized_like_heading(text)
+    !is_caption(text) && !is_run_in(text) && !is_date_line(text) && sized_like_heading(text)
+}
+
+/// Whether a word names a calendar month (`June`, `Sept.`, `oct`).
+fn is_month(w: &str) -> bool {
+    const MONTHS: [&str; 12] = [
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+    ];
+    let w = w.trim_end_matches(['.', ',']).to_lowercase();
+    w.len() >= 3
+        && MONTHS
+            .iter()
+            .any(|m| *m == w || (w.len() <= 4 && m.starts_with(w.as_str())))
+}
+
+/// A line that is only a date (`June 2023`, `March 15, 2021`,
+/// `1 October 2020`). Cover pages and letterheads set the issue date large
+/// or bold, but it labels the document rather than opening a section.
+fn is_date_line(text: &str) -> bool {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if !(2..=4).contains(&words.len()) {
+        return false;
+    }
+    let mut months = 0;
+    let mut year = false;
+    for w in &words {
+        let core = w.trim_end_matches([',', '.']);
+        if is_month(w) {
+            months += 1;
+        } else if core.len() == 4 && core.chars().all(|c| c.is_ascii_digit()) {
+            year = true;
+        } else if !(core.len() <= 2 && !core.is_empty() && core.chars().all(|c| c.is_ascii_digit()))
+        {
+            return false;
+        }
+    }
+    months == 1 && year
+}
+
+/// Whether a line is the title of a table of contents (`Contents`,
+/// `Table of Contents`), in a few common languages.
+fn is_toc_title(text: &str) -> bool {
+    const TITLES: [&str; 9] = [
+        "contents",
+        "table of contents",
+        "inhalt",
+        "inhaltsverzeichnis",
+        "table des matières",
+        "sommaire",
+        "índice",
+        "indice",
+        "目录",
+    ];
+    let t = collapse_ws(text.trim().trim_end_matches(':')).to_lowercase();
+    TITLES.contains(&t.as_str())
+}
+
+/// Whether the two non-blank lines after `idx` are contents entries.
+fn opens_toc(lines: &[&str], idx: usize) -> bool {
+    let mut next = lines[idx + 1..].iter().filter(|l| !l.trim().is_empty());
+    matches!((next.next(), next.next()), (Some(a), Some(b)) if is_toc_entry(a) && is_toc_entry(b))
 }
 
 fn sized_like_heading(text: &str) -> bool {
@@ -600,6 +671,11 @@ pub fn page_to_markdown(page: &ParsedPage, style: &DocStyle) -> String {
         if level.is_some() && level == suppressed {
             level = None;
         }
+        // The title of a table of contents opens a top-level section even
+        // when it is set in the body font.
+        if level.is_none() && open.is_none() && is_toc_title(&text) && opens_toc(&lines, idx - 1) {
+            level = Some(1);
+        }
         suppressed = match (styled, level) {
             (Some(lv), None) if suppressed.is_none_or(|s| s == lv) => Some(lv),
             _ => None,
@@ -717,6 +793,42 @@ mod tests {
         assert!(md.contains("\nPart II. Testing\nSection 2.1"), "{md}");
         // Past the listing the same styled line is a heading again.
         assert!(md.contains("\n## Part II. Testing\n"), "{md}");
+    }
+
+    #[test]
+    fn date_lines_are_not_headings() {
+        assert!(is_date_line("June 2023"));
+        assert!(is_date_line("March 15, 2021"));
+        assert!(is_date_line("1 Oct. 2020"));
+        assert!(!is_date_line("2023"));
+        assert!(!is_date_line("May Day 2023"));
+        assert!(!is_date_line("Results for June 2023"));
+        assert!(!is_date_line("Marching 2023"));
+        assert!(!plausible_heading("June 2023"));
+        assert!(plausible_heading("June Elections"));
+    }
+
+    #[test]
+    fn body_styled_contents_title_becomes_heading() {
+        let text = "Table of Contents
+Introduction .......... 3
+Methods .......... 7
+Table of Contents";
+        let items = vec![
+            item("Table of Contents", 50.0, 50.0, 12.0, "Arial"),
+            item("Introduction .......... 3", 50.0, 70.0, 12.0, "Arial"),
+            item("Methods .......... 7", 50.0, 90.0, 12.0, "Arial"),
+        ];
+        let p = page(text, items);
+        let style = DocStyle::from_pages([&p]);
+        let md = page_to_markdown(&p, &style);
+        let lines: Vec<&str> = md.lines().collect();
+        assert_eq!(lines[0], "# Table of Contents");
+        assert!(lines.contains(&"Introduction .......... 3"));
+        // Without contents entries after it, the phrase stays body text.
+        assert_eq!(*lines.last().unwrap(), "Table of Contents");
+        assert!(is_toc_title("CONTENTS"));
+        assert!(!is_toc_title("Contents of the box"));
     }
 
     #[test]
