@@ -192,6 +192,9 @@ fn split_tight_header(line: &str, segs: &[Seg], below: &[Seg]) -> Option<Vec<Seg
             _ => {}
         }
     }
+    if words.len() > below.len() {
+        return group_header_words(words, below);
+    }
     if words.len() != below.len() {
         return None;
     }
@@ -215,6 +218,57 @@ fn split_tight_header(line: &str, segs: &[Seg], below: &[Seg]) -> Option<Vec<Seg
             })
             .collect(),
     )
+}
+
+/// Max words in one multi-word header label.
+const MAX_HEADER_LABEL_WORDS: usize = 3;
+
+/// Multi-word column labels ("DI Water  Glucose Solution") set with single
+/// spaces: assign each word to the data cell below whose centre is nearest.
+/// Accepted only when every cell gets a label of at most
+/// [`MAX_HEADER_LABEL_WORDS`] words that starts like a label (not with a
+/// lowercase letter, as a sentence continuation would).
+///
+/// Each label keeps the union of its own extent and its cell's span,
+/// clamped so it never reaches a neighbouring cell. Keeping the label's
+/// extent stops a wider title line above (which spans several labels) from
+/// being mistaken for a row of the same table.
+fn group_header_words(words: Vec<Seg>, below: &[Seg]) -> Option<Vec<Seg>> {
+    let center = |s: &Seg| (s.start + s.end) as f64 / 2.0;
+    let mut groups: Vec<Vec<Seg>> = vec![Vec::new(); below.len()];
+    for w in words {
+        let c = center(&w);
+        let best = (0..below.len()).min_by(|&a, &b| {
+            (center(&below[a]) - c)
+                .abs()
+                .total_cmp(&(center(&below[b]) - c).abs())
+        })?;
+        groups[best].push(w);
+    }
+    let label_like = |g: &Vec<Seg>| {
+        !g.is_empty()
+            && g.len() <= MAX_HEADER_LABEL_WORDS
+            && !g[0].text.chars().next().is_some_and(char::is_lowercase)
+    };
+    if !groups.iter().all(label_like) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(below.len());
+    for (k, (g, b)) in groups.into_iter().zip(below).enumerate() {
+        let lo = if k == 0 { 0 } else { below[k - 1].end + 1 };
+        let hi = below
+            .get(k + 1)
+            .map_or(usize::MAX, |n| n.start.saturating_sub(1));
+        let start = g[0].start.min(b.start).max(lo);
+        let end = g[g.len() - 1].end.max(b.end).min(hi);
+        let text = g
+            .iter()
+            .map(|w| w.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        out.push(Seg { start, end, text });
+    }
+    Some(out)
 }
 
 /// Grow a table block starting at multi-cell line `start`. Returns the table
@@ -551,6 +605,40 @@ mod tests {
             ]
         );
         assert_eq!(t[0].rows[1], ["0.06", "N/A", "0.15", "0.28", "N/A", "0.70"]);
+    }
+
+    #[test]
+    fn multi_word_tight_header_groups_over_data_cells() {
+        let lines = [
+            "  MOHAVE COMMUNITY COLLEGE                     BIO181",
+            " Saccharometer DI Water Glucose Solution Yeast Suspension",
+            "2                 24 ml      0 ml               4 ml",
+            " 3                12 ml      12 ml              4 ml",
+            "4                 4 ml       12 ml              12 ml",
+        ];
+        let t = find_tables(&lines);
+        assert_eq!(t.len(), 1, "{t:?}");
+        // The title line above is not part of the table.
+        assert_eq!((t[0].first, t[0].last), (1, 4));
+        assert_eq!(
+            t[0].rows[0],
+            [
+                "Saccharometer",
+                "DI Water",
+                "Glucose Solution",
+                "Yeast Suspension"
+            ]
+        );
+        assert_eq!(t[0].rows[3], ["4", "4 ml", "12 ml", "12 ml"]);
+    }
+
+    #[test]
+    fn prose_with_lowercase_words_is_not_grouped_into_a_header() {
+        let lines = [
+            "The scores below are reported for each of the models",
+            "A        0.06         0.15         0.28",
+        ];
+        assert!(find_tables(&lines).is_empty());
     }
 
     #[test]
