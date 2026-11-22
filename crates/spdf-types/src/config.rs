@@ -96,6 +96,13 @@ pub struct ParseConfig {
     /// to [`ParsedPage::tables`]. Off by default — adds a small
     /// post-projection pass that costs ~O(items) per page.
     pub detect_tables: bool,
+    /// When true, drop running headers/footers: lines repeated verbatim in
+    /// the top/bottom 10% band of most pages (documents with >= 3 pages).
+    /// Off by default — those lines are real page content and a parser
+    /// should not silently discard them; enable it for retrieval pipelines
+    /// where boilerplate hurts precision.
+    #[serde(default)]
+    pub strip_running_text: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
     /// Fail `parse()` with [`SpdfError::InvalidInput`] once wall-clock
@@ -147,6 +154,7 @@ impl Default for ParseConfig {
             preserve_very_small_text: false,
             preserve_layout_alignment_across_pages: false,
             detect_tables: false,
+            strip_running_text: false,
             password: None,
             timeout_secs: None,
             max_input_bytes: None,
@@ -170,6 +178,7 @@ mod tests {
         assert_eq!(c.dpi, 150);
         assert_eq!(c.output_format, OutputFormat::Json);
         assert!(c.precise_bounding_box);
+        assert!(!c.strip_running_text);
     }
 
     #[test]

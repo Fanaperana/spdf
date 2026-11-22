@@ -80,6 +80,12 @@ struct ParseArgs {
     #[arg(long = "detect-tables", default_value_t = false)]
     detect_tables: bool,
 
+    /// Drop running headers/footers: lines repeated verbatim in the
+    /// top/bottom 10% of most pages (documents with 3+ pages). Off by
+    /// default so no page content is silently discarded.
+    #[arg(long = "strip-headers-footers", default_value_t = false)]
+    strip_headers_footers: bool,
+
     /// Max pages to process.
     #[arg(long, default_value_t = 10_000)]
     max_pages: u32,
@@ -258,6 +264,7 @@ fn run_parse(args: ParseArgs, quiet: bool) -> Result<()> {
     }
     cfg.preserve_very_small_text = args.preserve_small_text;
     cfg.detect_tables = args.detect_tables;
+    cfg.strip_running_text = args.strip_headers_footers;
     if args.trace_grid || args.visualize_grid.is_some() {
         let mut debug = spdf_types::DebugConfig::default();
         debug.enabled = true;

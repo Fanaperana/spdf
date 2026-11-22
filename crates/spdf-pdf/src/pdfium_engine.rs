@@ -313,6 +313,14 @@ impl PdfEngine for PdfiumEngine {
                 }
             }
 
+            // Values typed into interactive form fields live in widget
+            // annotations, not the content stream.
+            let mut form_items = Vec::new();
+            for field in form_widgets(&page, height) {
+                form_items.extend(crate::form::field_items(&field, &items));
+            }
+            items.extend(form_items);
+
             let images = if options.extract_images {
                 extract_images(&page, height)
             } else {
@@ -419,6 +427,48 @@ fn encode_image_object_to_png(
         .write_image(rgba.as_raw(), w, h, image::ExtendedColorType::Rgba8)
         .ok()?;
     Some(buf.into_inner())
+}
+
+/// Visible text-like form field widgets (text, combo and list boxes) that
+/// carry a value, in top-left coordinates.
+fn form_widgets(
+    page: &pdfium_render::prelude::PdfPage<'_>,
+    page_height: f64,
+) -> Vec<crate::form::FieldWidget> {
+    use pdfium_render::prelude::{PdfFormField, PdfPageAnnotationCommon};
+    let mut out = Vec::new();
+    for annot in page.annotations().iter() {
+        let Some(field) = annot.as_form_field() else {
+            continue;
+        };
+        if annot.is_hidden() {
+            continue;
+        }
+        let value = match field {
+            PdfFormField::Text(f) if !f.is_password() => f.value(),
+            PdfFormField::ComboBox(f) => f.value(),
+            PdfFormField::ListBox(f) => f.value(),
+            _ => None,
+        };
+        let Some(value) = value.filter(|v| !v.trim().is_empty()) else {
+            continue;
+        };
+        let Ok(rect) = annot.bounds() else {
+            continue;
+        };
+        let top = rect.top().value as f64;
+        let bottom = rect.bottom().value as f64;
+        let left = rect.left().value as f64;
+        let right = rect.right().value as f64;
+        out.push(crate::form::FieldWidget {
+            left: left.min(right),
+            top: page_height - top.max(bottom),
+            width: (right - left).abs(),
+            height: (top - bottom).abs(),
+            value,
+        });
+    }
+    out
 }
 
 /// All non-whitespace, non-generated glyphs of a page in content order,

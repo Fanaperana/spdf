@@ -209,10 +209,10 @@ impl SpdfParser {
 
         let mut processed: Vec<ParsedPage> = project_pages_to_grid(pages, &cfg);
 
-        // Strip running headers / footers that repeat across pages. Lifts
-        // precision on multi-page docs (NIST 800-53r5, NIST 800-63b, RFC
-        // specs) without hurting recall on prose pages.
-        if processed.len() >= 3 {
+        // Optionally strip running headers / footers that repeat across
+        // pages. Opt-in: they are genuine page content, but dropping them
+        // lifts precision for retrieval on long multi-page specs.
+        if cfg.strip_running_text && processed.len() >= 3 {
             strip_repeating_running_text(&mut processed);
         }
 
@@ -630,7 +630,7 @@ fn is_cid_garbage_layer(items: &[TextItem]) -> bool {
         }
         total += 1;
         vocab.insert(s);
-        let is_ligature = LIGATURE_TOKENS.iter().any(|&l| l == s);
+        let is_ligature = LIGATURE_TOKENS.contains(&s);
         // Single non-alphanumeric glyphs also count as broken fallback.
         let is_symbol = s.chars().count() == 1 && !s.chars().next().unwrap().is_alphanumeric();
         if is_ligature || is_symbol {
@@ -750,6 +750,11 @@ impl ParseConfigBuilder {
     }
     pub fn password(mut self, pw: impl Into<String>) -> Self {
         self.config.password = Some(pw.into());
+        self
+    }
+    /// Drop running headers/footers repeated across pages (off by default).
+    pub fn strip_running_text(mut self, on: bool) -> Self {
+        self.config.strip_running_text = on;
         self
     }
     pub fn precise_bounding_box(mut self, on: bool) -> Self {
@@ -1122,6 +1127,48 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 mod tests {
     use super::*;
 
+    fn page_with(lines: &[(&str, f64)]) -> ParsedPage {
+        let items: Vec<TextItem> = lines
+            .iter()
+            .map(|(t, y)| TextItem::new(*t, 72.0, *y, 100.0, 10.0))
+            .collect();
+        ParsedPage {
+            page_num: 1,
+            width: 612.0,
+            height: 792.0,
+            text: lines.iter().map(|(t, _)| *t).collect::<Vec<_>>().join(
+                "
+",
+            ),
+            text_items: items,
+            bounding_boxes: None,
+            tables: None,
+        }
+    }
+
+    #[test]
+    fn running_text_stripping_is_opt_in() {
+        assert!(!ParseConfig::default().strip_running_text);
+        assert!(
+            SpdfParser::builder()
+                .strip_running_text(true)
+                .config()
+                .strip_running_text
+        );
+    }
+
+    #[test]
+    fn strip_repeating_running_text_drops_band_repeats_only() {
+        let mut pages: Vec<ParsedPage> = (0..3)
+            .map(|_| page_with(&[("ACME Confidential", 30.0), ("Body text", 300.0)]))
+            .collect();
+        strip_repeating_running_text(&mut pages);
+        for p in &pages {
+            assert_eq!(p.text, "Body text");
+            assert_eq!(p.text_items.len(), 1);
+        }
+    }
+
     #[test]
     fn select_pages_defaults_to_all() {
         assert_eq!(select_pages(3, None).unwrap(), vec![1, 2, 3]);
@@ -1192,7 +1239,7 @@ mod tests {
     fn length_scan_handles_overflow_saturation() {
         // A /Length value that overflows u64 saturates rather than panicking.
         let mut s = b"<< /Length ".to_vec();
-        s.extend(std::iter::repeat(b'9').take(40));
+        s.extend(std::iter::repeat_n(b'9', 40));
         s.extend_from_slice(b" >>");
         assert_eq!(scan_max_declared_length(&s), Some(u64::MAX));
     }
