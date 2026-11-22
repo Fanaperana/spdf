@@ -304,7 +304,105 @@ fn heading_level(headings: &HashMap<String, usize>, line: &str) -> Option<usize>
     headings.get(&key).copied()
 }
 
+/// Words that introduce a figure/table caption when followed by an
+/// identifier (`Figure 2.1:`, `Table 13.2.`, `Fig. 4`). Captions are often
+/// set bold or larger, but they label a float rather than open a section.
+const CAPTION_WORDS: [&str; 14] = [
+    "figure",
+    "fig",
+    "table",
+    "tab",
+    "chart",
+    "exhibit",
+    "graph",
+    "plate",
+    "map",
+    "diagram",
+    "scheme",
+    "listing",
+    "illustration",
+    "photo",
+];
+
+/// Whether `tok` looks like a caption number: `3`, `2.1:`, `IV`, `A.1`, `S2`.
+fn is_caption_id(tok: &str) -> bool {
+    let t = tok.trim_end_matches([':', '.', ')', '-', '–', '—']);
+    if t.is_empty() {
+        return false;
+    }
+    let first = t.chars().next().unwrap_or(' ');
+    if first.is_ascii_digit() {
+        return t
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || ".-–".contains(c));
+    }
+    if t.chars().all(|c| "IVXLivxl".contains(c)) && t.len() <= 5 {
+        return true;
+    }
+    // A letter-prefixed number such as `A.1` or `S2`.
+    let mut cs = t.chars();
+    cs.next();
+    let rest: String = cs.collect();
+    first.is_ascii_uppercase()
+        && rest
+            .trim_start_matches('.')
+            .starts_with(|c: char| c.is_ascii_digit())
+}
+
+/// A figure or table caption such as `Figure 2.1: Surveyed firms by size`.
+fn is_caption(text: &str) -> bool {
+    let mut words = text.split_whitespace();
+    let (Some(w0), Some(w1)) = (words.next(), words.next()) else {
+        return false;
+    };
+    let kw = w0.trim_end_matches('.').to_lowercase();
+    CAPTION_WORDS.contains(&kw.as_str()) && is_caption_id(w1)
+}
+
+/// Whether a word is a list/section enumerator: `a.`, `3.`, `2.1.`, `(iv)`, `IV.`.
+fn is_enumerator(w: &str) -> bool {
+    let core = w.trim_start_matches('(').trim_end_matches(['.', ')']);
+    !core.is_empty()
+        && w.len() > core.len()
+        && (core.chars().all(|c| c.is_ascii_digit() || c == '.')
+            || (core.chars().count() == 1 && core.chars().all(|c| c.is_alphabetic()))
+            || core.chars().all(|c| "IVXivx".contains(c)))
+}
+
+/// A run-in heading: a short bold lead sentence followed on the same line
+/// by body text (`d. Awareness of X. About 68% of respondents know ...`).
+/// The line is a paragraph opening, not a section heading.
+fn is_run_in(text: &str) -> bool {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let start = usize::from(words.first().is_some_and(|w| is_enumerator(w)));
+    for i in start + 1..words.len().saturating_sub(1) {
+        let w = words[i];
+        if !(w.ends_with('.') || w.ends_with(':')) {
+            continue;
+        }
+        // Skip abbreviations and initials (`U.S.`, `e.g.`, `Dr.`).
+        let core = w.trim_end_matches(['.', ':']);
+        if core.contains('.') || core.chars().count() <= 2 {
+            continue;
+        }
+        let before = i + 1 - start;
+        let after = &words[i + 1..];
+        let next_starts_sentence = after[0]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_uppercase() || c.is_ascii_digit());
+        if before >= 2 && after.len() >= 4 && next_starts_sentence {
+            return true;
+        }
+    }
+    false
+}
+
 fn plausible_heading(text: &str) -> bool {
+    !is_caption(text) && !is_run_in(text) && sized_like_heading(text)
+}
+
+fn sized_like_heading(text: &str) -> bool {
     let chars = text.chars().count();
     (2..=MAX_HEADING_CHARS).contains(&chars)
         && text.split_whitespace().count() <= MAX_HEADING_WORDS
@@ -351,12 +449,21 @@ fn page_tables(page: &ParsedPage, lines: &[&str]) -> Vec<crate::md_table::MdTabl
     all
 }
 
+fn push_heading(out: &mut Vec<String>, level: usize, text: &str) {
+    if out.last().is_some_and(|l| !l.is_empty()) {
+        out.push(String::new());
+    }
+    out.push(format!("{} {}", "#".repeat(level), text));
+}
+
 /// Render a single page as Markdown using document-level `style`.
 pub fn page_to_markdown(page: &ParsedPage, style: &DocStyle) -> String {
     let headings = heading_lines(page, style);
     let mut out: Vec<String> = Vec::new();
     // Level of the heading that is currently open (for multi-line headings).
     let mut open: Option<usize> = None;
+    // Heading style of the previous line when it was rejected as a heading.
+    let mut suppressed: Option<usize> = None;
     let text = crate::page_text(page);
     let lines: Vec<&str> = text.lines().collect();
     let tables = page_tables(page, &lines);
@@ -365,6 +472,7 @@ pub fn page_to_markdown(page: &ParsedPage, style: &DocStyle) -> String {
     while idx < lines.len() {
         if let Some(t) = next_table.next_if(|t| t.first == idx) {
             open = None;
+            suppressed = None;
             if out.last().is_some_and(|l| !l.is_empty()) {
                 out.push(String::new());
             }
@@ -378,11 +486,22 @@ pub fn page_to_markdown(page: &ParsedPage, style: &DocStyle) -> String {
         let line = raw.trim();
         if line.is_empty() {
             open = None;
+            suppressed = None;
             out.push(String::new());
             continue;
         }
         let text = collapse_ws(line);
-        let level = heading_level(&headings, line).filter(|_| plausible_heading(&text));
+        let styled = heading_level(&headings, line);
+        let mut level = styled.filter(|_| plausible_heading(&text));
+        // The wrapped remainder of a rejected caption or run-in heading
+        // shares its style; keep it with the body too.
+        if level.is_some() && level == suppressed {
+            level = None;
+        }
+        suppressed = match (styled, level) {
+            (Some(lv), None) if suppressed.is_none_or(|s| s == lv) => Some(lv),
+            _ => None,
+        };
         match level {
             Some(lv) if open == Some(lv) => {
                 // Continuation of a heading wrapped over several lines.
@@ -391,10 +510,7 @@ pub fn page_to_markdown(page: &ParsedPage, style: &DocStyle) -> String {
                 last.push_str(&text);
             }
             Some(lv) => {
-                if out.last().is_some_and(|l| !l.is_empty()) {
-                    out.push(String::new());
-                }
-                out.push(format!("{} {}", "#".repeat(lv), text));
+                push_heading(&mut out, lv, &text);
                 open = Some(lv);
             }
             None => {
@@ -639,5 +755,70 @@ NOTE",
             "{md}"
         );
         assert!(!md.contains("# NOTE"), "{md}");
+    }
+
+    #[test]
+    fn captions_are_not_headings() {
+        assert!(is_caption(
+            "Figure 2.1: Surveyed MSMEs by size across sectors (%)"
+        ));
+        assert!(is_caption("Table 13.2. Effect of cations on flocculation"));
+        assert!(is_caption("Fig. 4 Overview"));
+        assert!(is_caption("TABLE IV Results"));
+        assert!(is_caption("Table A.1: Extra"));
+        assert!(!is_caption("Table of Contents"));
+        assert!(!is_caption("Figures and Tables"));
+        assert!(!is_caption("3. Impact on Business Operations"));
+    }
+
+    #[test]
+    fn run_in_leads_are_not_headings() {
+        assert!(is_run_in(
+            "d. Awareness of Plastics Ordinance. About 68% of respondents know that there is a city"
+        ));
+        assert!(is_run_in(
+            "Data collection: We surveyed three hundred firms in total"
+        ));
+        assert!(!is_run_in("3.1. Status of Business Operations"));
+        assert!(!is_run_in(
+            "Restrictions on Land Ownership by Foreigners in Selected Jurisdictions"
+        ));
+        assert!(!is_run_in("U.S. Policy Toward the Middle East and Beyond"));
+        assert!(!is_run_in("Chapter 2. Methods"));
+    }
+
+    #[test]
+    fn bold_caption_and_its_wrap_stay_body() {
+        let mut items = vec![
+            item(
+                "Figure 2.1: Surveyed firms by size",
+                50.0,
+                40.0,
+                10.0,
+                "Arial-Bold",
+            ),
+            item("across all sectors (%)", 50.0, 52.0, 10.0, "Arial-Bold"),
+            item("Results", 50.0, 90.0, 10.0, "Arial-Bold"),
+        ];
+        items.extend(body_items(8, 110.0));
+        let p = page(
+            "Figure 2.1: Surveyed firms by size
+across all sectors (%)
+
+Results
+body text line with words",
+            items,
+        );
+        let style = DocStyle::from_pages([&p]);
+        let md = page_to_markdown(&p, &style);
+        assert!(
+            md.starts_with(
+                "Figure 2.1: Surveyed firms by size
+across all sectors (%)
+"
+            ),
+            "{md}"
+        );
+        assert!(md.contains("# Results"), "{md}");
     }
 }
