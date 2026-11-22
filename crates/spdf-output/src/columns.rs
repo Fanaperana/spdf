@@ -25,6 +25,9 @@ const FULL_LINE_RATIO: f64 = 0.65;
 const MIN_FULL_SHARE: f64 = 0.6;
 /// Largest number of interior holes, relative to a side's text lines.
 const MAX_HOLE_SHARE: f64 = 0.25;
+/// Most text lines a column region may shed at its end (page footers,
+/// a closing full-width line) to expose the column gutter above them.
+const MAX_CUT_TAIL: usize = 2;
 /// Recursion guard for very many columns.
 const MAX_DEPTH: usize = 6;
 
@@ -226,7 +229,13 @@ fn emit_columns(lines: &[Line], depth: usize, out: &mut Vec<String>) {
 /// and splits into valid columns; returns its exclusive end.
 fn find_region(lines: &[Line], start: usize) -> Option<usize> {
     let mut occ: Vec<bool> = Vec::new();
+    let mut gut: Vec<(usize, usize)> = Vec::new();
     let mut end = start;
+    // Ends at which the gutter set narrowed: a line spanning the real
+    // column gutter (a page footer, a full-width caption) can still leave
+    // some other, bogus gutter open, so the longest run may not split while
+    // the run before that line does.
+    let mut cuts: Vec<usize> = Vec::new();
     for (j, l) in lines.iter().enumerate().skip(start) {
         let mut next = occ.clone();
         if next.len() < l.len() {
@@ -237,17 +246,35 @@ fn find_region(lines: &[Line], start: usize) -> Option<usize> {
                 next[c] = true;
             }
         }
-        if gutters(&next).is_empty() && j > start {
+        let next_gut = gutters(&next);
+        if next_gut.is_empty() && j > start {
             break;
         }
+        let closes_gutter = gut
+            .iter()
+            .any(|&(a, b)| !next_gut.iter().any(|&(c, d)| c < b && a < d));
+        if j > start && closes_gutter {
+            cuts.push(end);
+        }
         occ = next;
+        gut = next_gut;
         end = j + 1;
     }
-    // Trailing blank lines belong to whatever follows.
-    while end > start && is_blank(&lines[end - 1]) {
-        end -= 1;
-    }
-    (end > start && split_block(&lines[start..end], 0).is_some()).then_some(end)
+    // Only a short tail may be cut off: a footer or closing full-width line.
+    // When many lines follow the spanning one (a table whose later rows
+    // cross the gutter), the run is not a column block that it ends.
+    let tail_ok =
+        |cut: usize| lines[cut..end].iter().filter(|l| !is_blank(l)).count() <= MAX_CUT_TAIL;
+    let cuts: Vec<usize> = cuts.into_iter().filter(|&c| tail_ok(c)).collect();
+    std::iter::once(end)
+        .chain(cuts.into_iter().rev())
+        .find_map(|mut end| {
+            // Trailing blank lines belong to whatever follows.
+            while end > start && is_blank(&lines[end - 1]) {
+                end -= 1;
+            }
+            (end > start && split_block(&lines[start..end], 0).is_some()).then_some(end)
+        })
 }
 
 /// Rewrite side-by-side columns in `text` into column-major reading order.
@@ -406,5 +433,42 @@ sustainability
     fn single_column_prose_is_unchanged() {
         let text = "This is a normal paragraph of text that\nwraps over a few lines without any gutter\nin the middle of it at all, as usual.";
         assert_eq!(reflow_columns(text), text);
+    }
+
+    #[test]
+    fn full_width_footer_does_not_hide_columns() {
+        // The footer spans the column gutter but leaves a gap of its own
+        // open past the columns' right edge; the columns above it must
+        // still be split.
+        let footer = format!(
+            "{:<66}   12",
+            "A running footer line that spans the whole width of the page"
+        );
+        let text = format!(
+            "{TWO_COL}
+{footer}"
+        );
+        let out = reflow_columns(&text);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0], "Introduction to the topic here");
+        assert_eq!(lines[5], "Results were measured over");
+        assert_eq!(lines[10], footer.trim_end());
+    }
+
+    #[test]
+    fn long_spanning_tail_keeps_block_intact() {
+        // Several rows cross the gutter after the two-sided part (a table
+        // whose later rows span cells): the run is no column block.
+        let row = format!(
+            "{:<66}   12",
+            "A spanning table row that runs across the whole width of it"
+        );
+        let text = format!(
+            "{TWO_COL}
+{row}
+{row}
+{row}"
+        );
+        assert_eq!(reflow_columns(&text), text);
     }
 }
