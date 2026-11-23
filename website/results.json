@@ -1,0 +1,1227 @@
+{
+ "timestamp": "2026-11-23T14:33:33+00:00",
+ "commit": "82c86e9+dirty",
+ "repeats": 3,
+ "measurement": "CLI, one process per document, median of N runs; peak RSS = max(polled RSS incl. children, exact PeakWorkingSetSize)",
+ "versions": {
+  "spdf": "spdf 0.2.0-alpha.2",
+  "liteparse": "lit 2.19.0"
+ },
+ "engines": {
+  "spdf": {
+   "odl": {
+    "format": "markdown",
+    "docs": 200,
+    "overall": 0.9014889269961286,
+    "nid": 0.9265487783862774,
+    "nid_s": 0.934716179604106,
+    "teds": 0.8351137465619135,
+    "mhs": 0.8514946321933092,
+    "sec_per_doc": 0.04263666951679625,
+    "sec_median": 0.04188789997715503,
+    "sec_p95": 0.04726087501039728,
+    "peak_rss_mb": 30.846976,
+    "rss_mean_mb": 15.01489152,
+    "repeats": 3,
+    "failures": 0
+   },
+   "edge": {
+    "nid_mean": 0.9746718857932304,
+    "f1_mean": 0.9664082687338502,
+    "ocr_nid_mean": 0.9900990099009902,
+    "robust_pass": 1.0,
+    "huge_sec": 0.16786890011280775,
+    "huge_rss_mb": 17.768448,
+    "edge_sec_total": 4.650103500345722,
+    "total_sec": 4.650103500345722,
+    "max_rss_mb": 66.965504,
+    "rss_mean_mb": 22.214210782608696,
+    "ocr_sec_mean": 0.3667975555743194,
+    "ocr_sec_max": 0.6078500000294298,
+    "ocr_rss_mean_mb": 57.28620088888889,
+    "ocr_rss_max_mb": 66.965504,
+    "repeats": 3,
+    "case_count": 46
+   }
+  },
+  "liteparse": {
+   "odl": {
+    "format": "markdown",
+    "docs": 200,
+    "overall": 0.8861558345950367,
+    "nid": 0.9113665529126237,
+    "nid_s": 0.9138944751864848,
+    "teds": 0.8277359601225062,
+    "mhs": 0.8319791313000439,
+    "sec_per_doc": 0.09428945550578646,
+    "sec_median": 0.0944868999067694,
+    "sec_p95": 0.11065645499620584,
+    "peak_rss_mb": 53.141504,
+    "rss_mean_mb": 30.879928319999998,
+    "repeats": 3,
+    "failures": 0
+   },
+   "edge": {
+    "nid_mean": 0.8685724183231807,
+    "f1_mean": 0.884987668795711,
+    "ocr_nid_mean": 0.7489519188186035,
+    "robust_pass": 1.0,
+    "huge_sec": 0.3328209000173956,
+    "huge_rss_mb": 40.910848,
+    "edge_sec_total": 9.642418399220333,
+    "total_sec": 9.642418399220333,
+    "max_rss_mb": 158.785536,
+    "rss_mean_mb": 73.91855304347825,
+    "ocr_sec_mean": 0.4744100777380582,
+    "ocr_sec_max": 0.9236623998731375,
+    "ocr_rss_mean_mb": 90.3168,
+    "ocr_rss_max_mb": 122.146816,
+    "repeats": 3,
+    "case_count": 46
+   }
+  }
+ },
+ "tally": {
+  "wins": 125,
+  "ties": 36,
+  "losses": 1,
+  "total": 162,
+  "beats_liteparse": false
+ },
+ "rows": [
+  {
+   "metric": "odl.overall",
+   "spdf": 0.9014889269961286,
+   "liteparse": 0.8861558345950367,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "odl.nid",
+   "spdf": 0.9265487783862774,
+   "liteparse": 0.9113665529126237,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "odl.nid_s",
+   "spdf": 0.934716179604106,
+   "liteparse": 0.9138944751864848,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "odl.teds",
+   "spdf": 0.8351137465619135,
+   "liteparse": 0.8277359601225062,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "odl.mhs",
+   "spdf": 0.8514946321933092,
+   "liteparse": 0.8319791313000439,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "odl.failures",
+   "spdf": 0,
+   "liteparse": 0,
+   "better": "lower",
+   "status": "tie"
+  },
+  {
+   "metric": "odl.sec_per_doc",
+   "spdf": 0.04263666951679625,
+   "liteparse": 0.09428945550578646,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "odl.sec_median",
+   "spdf": 0.04188789997715503,
+   "liteparse": 0.0944868999067694,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "odl.sec_p95",
+   "spdf": 0.04726087501039728,
+   "liteparse": 0.11065645499620584,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "odl.peak_rss_mb",
+   "spdf": 30.846976,
+   "liteparse": 53.141504,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "odl.rss_mean_mb",
+   "spdf": 15.01489152,
+   "liteparse": 30.879928319999998,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.nid_mean",
+   "spdf": 0.9746718857932304,
+   "liteparse": 0.8685724183231807,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "edge.f1_mean",
+   "spdf": 0.9664082687338502,
+   "liteparse": 0.884987668795711,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "edge.ocr_nid_mean",
+   "spdf": 0.9900990099009902,
+   "liteparse": 0.7489519188186035,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "edge.robust_pass",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.total_sec",
+   "spdf": 4.650103500345722,
+   "liteparse": 9.642418399220333,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.max_rss_mb",
+   "spdf": 66.965504,
+   "liteparse": 158.785536,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.rss_mean_mb",
+   "spdf": 22.214210782608696,
+   "liteparse": 73.91855304347825,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.ocr_sec_mean",
+   "spdf": 0.3667975555743194,
+   "liteparse": 0.4744100777380582,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.ocr_sec_max",
+   "spdf": 0.6078500000294298,
+   "liteparse": 0.9236623998731375,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.ocr_rss_mean_mb",
+   "spdf": 57.28620088888889,
+   "liteparse": 90.3168,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.ocr_rss_max_mb",
+   "spdf": 66.965504,
+   "liteparse": 122.146816,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.huge_sec",
+   "spdf": 0.16786890011280775,
+   "liteparse": 0.3328209000173956,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.huge_rss_mb",
+   "spdf": 17.768448,
+   "liteparse": 40.910848,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.arabic_rtl",
+   "spdf": 1.0,
+   "liteparse": 0.8666666666666667,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.cjk_chinese",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.corrupt_bad_xref",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.corrupt_no_xref",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.corrupt_truncated",
+   "spdf": 0.0,
+   "liteparse": 0.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.diacritics",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.empty_pages",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.encrypted_owner_only",
+   "spdf": 1.0,
+   "liteparse": 0.6473988439306358,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.encrypted_user_pw",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.faux_bold",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.form_fields",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.garbage_bytes",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.headers_footers",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.hebrew_rtl",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.html_named_pdf",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.huge_400_pages",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.invisible_ocr_layer",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.japanese",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.justified",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.korean",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.landscape_wide",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.letter_spaced",
+   "spdf": 1.0,
+   "liteparse": 0.967930029154519,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.ligatures",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.mixed_page_sizes",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.no_tounicode",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.rotated_page_180",
+   "spdf": 1.0,
+   "liteparse": 0.5301204819277108,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.rotated_page_270",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.rotated_page_90",
+   "spdf": 1.0,
+   "liteparse": 0.519453207150368,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.rotated_text",
+   "spdf": 1.0,
+   "liteparse": 0.8705357142857143,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.scanned_chinese",
+   "spdf": 1.0,
+   "liteparse": 0.039215686274509776,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned_lowdpi",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.scanned_mixed_pages",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.scanned_multilang",
+   "spdf": 0.9108910891089109,
+   "liteparse": 0.766839378238342,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned_noisy_jpeg",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.scanned_rotated_90",
+   "spdf": 1.0,
+   "liteparse": 0.334319526627219,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned_skewed",
+   "spdf": 1.0,
+   "liteparse": 0.6001926782273603,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned_table",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.simple",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.table_bordered",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.table_borderless",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.table_sparse",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.three_column",
+   "spdf": 1.0,
+   "liteparse": 0.5585429314830876,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.tiny_and_huge_text",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.two_column",
+   "spdf": 1.0,
+   "liteparse": 0.6473988439306358,
+   "better": "higher",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.zero_bytes",
+   "spdf": 1.0,
+   "liteparse": 1.0,
+   "better": "higher",
+   "status": "tie"
+  },
+  {
+   "metric": "edge.case.arabic_rtl.sec",
+   "spdf": 0.02462140005081892,
+   "liteparse": 0.15569649985991418,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.cjk_chinese.sec",
+   "spdf": 0.03989679994992912,
+   "liteparse": 0.15570970019325614,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.corrupt_bad_xref.sec",
+   "spdf": 0.04050640016794205,
+   "liteparse": 0.09283880004659295,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.corrupt_no_xref.sec",
+   "spdf": 0.04138000006787479,
+   "liteparse": 0.11245630006305873,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.corrupt_truncated.sec",
+   "spdf": 0.02261059987358749,
+   "liteparse": 0.07802750007249415,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.diacritics.sec",
+   "spdf": 0.025494500063359737,
+   "liteparse": 0.14890889986418188,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.empty_pages.sec",
+   "spdf": 0.02413829998113215,
+   "liteparse": 0.17259309999644756,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.encrypted_owner_only.sec",
+   "spdf": 0.042162599973380566,
+   "liteparse": 0.09373429999686778,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.encrypted_user_pw.sec",
+   "spdf": 0.04227510001510382,
+   "liteparse": 0.17344240006059408,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.faux_bold.sec",
+   "spdf": 0.040872500045225024,
+   "liteparse": 0.16229790006764233,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.form_fields.sec",
+   "spdf": 0.04722649999894202,
+   "liteparse": 0.15621939999982715,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.garbage_bytes.sec",
+   "spdf": 0.02265949989669025,
+   "liteparse": 0.08439489989541471,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.headers_footers.sec",
+   "spdf": 0.023810699814930558,
+   "liteparse": 0.1716046999208629,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.hebrew_rtl.sec",
+   "spdf": 0.023417500080540776,
+   "liteparse": 0.15554349985904992,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.html_named_pdf.sec",
+   "spdf": 0.025023600086569786,
+   "liteparse": 0.07555160019546747,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.huge_400_pages.sec",
+   "spdf": 0.16786890011280775,
+   "liteparse": 0.3328209000173956,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.invisible_ocr_layer.sec",
+   "spdf": 0.026217800099402666,
+   "liteparse": 0.14915920002385974,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.japanese.sec",
+   "spdf": 0.023919100174680352,
+   "liteparse": 0.15622280002571642,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.justified.sec",
+   "spdf": 0.023384899832308292,
+   "liteparse": 0.14842840004712343,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.korean.sec",
+   "spdf": 0.02270679990760982,
+   "liteparse": 0.15972590004093945,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.landscape_wide.sec",
+   "spdf": 0.025564299896359444,
+   "liteparse": 0.08770429994910955,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.letter_spaced.sec",
+   "spdf": 0.025907699950039387,
+   "liteparse": 0.1804556001443416,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.ligatures.sec",
+   "spdf": 0.04081650008447468,
+   "liteparse": 0.15405469993129373,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.mixed_page_sizes.sec",
+   "spdf": 0.022646399913355708,
+   "liteparse": 0.17607299983501434,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.no_tounicode.sec",
+   "spdf": 0.04305059998296201,
+   "liteparse": 0.16156999999657273,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.rotated_page_180.sec",
+   "spdf": 0.041976300068199635,
+   "liteparse": 0.1512794999871403,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.rotated_page_270.sec",
+   "spdf": 0.042130300076678395,
+   "liteparse": 0.1468980999197811,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.rotated_page_90.sec",
+   "spdf": 0.042071300093084574,
+   "liteparse": 0.16156699997372925,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.rotated_text.sec",
+   "spdf": 0.040061399806290865,
+   "liteparse": 0.1513126997742802,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned.sec",
+   "spdf": 0.43867930001579225,
+   "liteparse": 0.5328796999529004,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned_chinese.sec",
+   "spdf": 0.3375204000622034,
+   "liteparse": 0.29686579992994666,
+   "better": "lower",
+   "status": "loss"
+  },
+  {
+   "metric": "edge.case.scanned_lowdpi.sec",
+   "spdf": 0.4381578001193702,
+   "liteparse": 0.5196534001734108,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned_mixed_pages.sec",
+   "spdf": 0.27088339999318123,
+   "liteparse": 0.3797611999325454,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned_multilang.sec",
+   "spdf": 0.17695229989476502,
+   "liteparse": 0.24712889990769327,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned_noisy_jpeg.sec",
+   "spdf": 0.3285740001592785,
+   "liteparse": 0.4915603001136333,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned_rotated_90.sec",
+   "spdf": 0.45219270000234246,
+   "liteparse": 0.5121654998511076,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned_skewed.sec",
+   "spdf": 0.6078500000294298,
+   "liteparse": 0.9236623998731375,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned_table.sec",
+   "spdf": 0.25036809989251196,
+   "liteparse": 0.36601349990814924,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.simple.sec",
+   "spdf": 0.0271206998731941,
+   "liteparse": 0.15738160000182688,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.table_bordered.sec",
+   "spdf": 0.039160999935120344,
+   "liteparse": 0.15615570009686053,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.table_borderless.sec",
+   "spdf": 0.042234000051394105,
+   "liteparse": 0.1565392001066357,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.table_sparse.sec",
+   "spdf": 0.025292300153523684,
+   "liteparse": 0.16912829992361367,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.three_column.sec",
+   "spdf": 0.04230850003659725,
+   "liteparse": 0.1040973998606205,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.tiny_and_huge_text.sec",
+   "spdf": 0.03068000008352101,
+   "liteparse": 0.149542500032112,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.two_column.sec",
+   "spdf": 0.04369789990596473,
+   "liteparse": 0.09632279979996383,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.zero_bytes.sec",
+   "spdf": 0.024012800073251128,
+   "liteparse": 0.0772685999982059,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.arabic_rtl.rss_mb",
+   "spdf": 13.824,
+   "liteparse": 73.99424,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.cjk_chinese.rss_mb",
+   "spdf": 13.164544,
+   "liteparse": 79.474688,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.corrupt_bad_xref.rss_mb",
+   "spdf": 14.04928,
+   "liteparse": 32.595968,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.corrupt_no_xref.rss_mb",
+   "spdf": 14.032896,
+   "liteparse": 33.15712,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.corrupt_truncated.rss_mb",
+   "spdf": 12.283904,
+   "liteparse": 27.656192,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.diacritics.rss_mb",
+   "spdf": 13.25056,
+   "liteparse": 77.283328,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.empty_pages.rss_mb",
+   "spdf": 13.74208,
+   "liteparse": 146.259968,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.encrypted_owner_only.rss_mb",
+   "spdf": 14.086144,
+   "liteparse": 32.837632,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.encrypted_user_pw.rss_mb",
+   "spdf": 14.0288,
+   "liteparse": 88.82176,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.faux_bold.rss_mb",
+   "spdf": 13.225984,
+   "liteparse": 88.285184,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.form_fields.rss_mb",
+   "spdf": 15.085568,
+   "liteparse": 81.895424,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.garbage_bytes.rss_mb",
+   "spdf": 11.927552,
+   "liteparse": 27.107328,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.headers_footers.rss_mb",
+   "spdf": 13.795328,
+   "liteparse": 129.368064,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.hebrew_rtl.rss_mb",
+   "spdf": 13.254656,
+   "liteparse": 76.296192,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.html_named_pdf.rss_mb",
+   "spdf": 11.935744,
+   "liteparse": 24.047616,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.huge_400_pages.rss_mb",
+   "spdf": 17.768448,
+   "liteparse": 40.910848,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.invisible_ocr_layer.rss_mb",
+   "spdf": 13.275136,
+   "liteparse": 74.305536,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.japanese.rss_mb",
+   "spdf": 13.279232,
+   "liteparse": 81.506304,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.justified.rss_mb",
+   "spdf": 13.811712,
+   "liteparse": 73.89184,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.korean.rss_mb",
+   "spdf": 13.254656,
+   "liteparse": 74.21952,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.landscape_wide.rss_mb",
+   "spdf": 13.819904,
+   "liteparse": 24.395776,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.letter_spaced.rss_mb",
+   "spdf": 13.840384,
+   "liteparse": 81.821696,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.ligatures.rss_mb",
+   "spdf": 13.848576,
+   "liteparse": 76.94336,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.mixed_page_sizes.rss_mb",
+   "spdf": 13.197312,
+   "liteparse": 158.785536,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.no_tounicode.rss_mb",
+   "spdf": 14.659584,
+   "liteparse": 82.038784,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.rotated_page_180.rss_mb",
+   "spdf": 13.828096,
+   "liteparse": 80.13824,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.rotated_page_270.rss_mb",
+   "spdf": 13.778944,
+   "liteparse": 82.038784,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.rotated_page_90.rss_mb",
+   "spdf": 13.787136,
+   "liteparse": 80.175104,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.rotated_text.rss_mb",
+   "spdf": 13.320192,
+   "liteparse": 77.08672,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned.rss_mb",
+   "spdf": 56.655872,
+   "liteparse": 88.154112,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned_chinese.rss_mb",
+   "spdf": 66.965504,
+   "liteparse": 85.471232,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned_lowdpi.rss_mb",
+   "spdf": 55.402496,
+   "liteparse": 83.083264,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned_mixed_pages.rss_mb",
+   "spdf": 56.48384,
+   "liteparse": 122.146816,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned_multilang.rss_mb",
+   "spdf": 47.169536,
+   "liteparse": 91.312128,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned_noisy_jpeg.rss_mb",
+   "spdf": 55.353344,
+   "liteparse": 81.85856,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned_rotated_90.rss_mb",
+   "spdf": 57.933824,
+   "liteparse": 88.641536,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned_skewed.rss_mb",
+   "spdf": 64.421888,
+   "liteparse": 89.841664,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.scanned_table.rss_mb",
+   "spdf": 55.189504,
+   "liteparse": 82.341888,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.simple.rss_mb",
+   "spdf": 13.795328,
+   "liteparse": 75.628544,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.table_bordered.rss_mb",
+   "spdf": 13.90592,
+   "liteparse": 80.084992,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.table_borderless.rss_mb",
+   "spdf": 13.733888,
+   "liteparse": 78.815232,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.table_sparse.rss_mb",
+   "spdf": 13.774848,
+   "liteparse": 78.372864,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.three_column.rss_mb",
+   "spdf": 14.27456,
+   "liteparse": 30.3104,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.tiny_and_huge_text.rss_mb",
+   "spdf": 13.832192,
+   "liteparse": 79.900672,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.two_column.rss_mb",
+   "spdf": 13.88544,
+   "liteparse": 32.817152,
+   "better": "lower",
+   "status": "win"
+  },
+  {
+   "metric": "edge.case.zero_bytes.rss_mb",
+   "spdf": 11.91936,
+   "liteparse": 24.133632,
+   "better": "lower",
+   "status": "win"
+  }
+ ]
+}

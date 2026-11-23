@@ -1,204 +1,386 @@
 <!doctype html>
 <html lang="en">
-
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>spdf — fast, spatial PDF parsing in Rust</title>
-  <meta name="description" content="spdf is a self-contained Rust CLI and library for extracting text from PDFs with preserved columns, tables, and layout — plus optional Tesseract OCR." />
+  <title>spdf: spatial PDF parsing in Rust, benchmarked against LiteParse</title>
+  <meta name="description" content="spdf is a Rust CLI and library that extracts PDF text with columns, tables and reading order intact, with built-in PP-OCRv5 OCR. 125 wins, 36 ties, 1 loss against LiteParse 2.19.0 across 162 tracked metrics." />
+  <meta name="color-scheme" content="dark light" />
+  <meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)" />
   <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  <link rel="preload" href="./results.json" as="fetch" crossorigin />
   <link rel="stylesheet" href="./styles.css" />
-  <meta property="og:title" content="spdf — fast, spatial PDF parsing in Rust" />
-  <meta property="og:description" content="Column-aware PDF text extraction, Tesseract OCR built-in, single static binary." />
+  <meta property="og:title" content="spdf: spatial PDF parsing in Rust" />
+  <meta property="og:description" content="Column-aware PDF extraction with built-in PP-OCRv5 OCR. 125 wins / 36 ties / 1 loss vs LiteParse 2.19.0." />
   <meta property="og:type" content="website" />
+  <script>
+    // Apply the saved theme before first paint (no flash).
+    (function () {
+      try {
+        var t = localStorage.getItem("spdf-theme");
+        if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    })();
+  </script>
 </head>
 
 <body>
-  <header class="hero">
-    <nav class="nav">
-      <a class="brand" href="#top">
-        <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true">
-          <rect x="4" y="4" width="24" height="24" rx="6" fill="#ff7a00" />
-          <path d="M11 9h6a4 4 0 0 1 0 8h-3v6h-3V9zm3 3v2h3a1 1 0 0 0 0-2h-3z" fill="#0b0b0b" />
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="nav-wrap">
+    <nav class="nav" aria-label="Main">
+      <a class="brand" href="#top" aria-label="spdf home">
+        <svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true">
+          <rect x="2" y="2" width="28" height="28" rx="7" fill="#ff7a00" />
+          <path d="M10 8h7a4.5 4.5 0 0 1 0 9h-4v7h-3V8zm3 3v3h4a1.5 1.5 0 0 0 0-3h-4z" fill="#0b0b0b" />
         </svg>
         <span>spdf</span>
       </a>
       <div class="nav-links">
-        <a href="#features">Features</a>
         <a href="#benchmark">Benchmark</a>
-        <a href="#install">Install</a>
-        <a href="#quickstart">Quick start</a>
-        <a class="external" href="https://github.com/Fanaperana/spdf" rel="noopener">GitHub ↗</a>
+        <a href="#ocr">OCR</a>
+        <a href="#quickstart">Quickstart</a>
+        <a href="#method">Method</a>
+        <a href="https://docs.rs/spdf-core" rel="noopener">Docs</a>
+      </div>
+      <div class="nav-actions">
+        <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle light and dark theme">
+          <svg class="i-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+          <svg class="i-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+        </button>
+        <a class="gh-btn" href="https://github.com/Fanaperana/spdf" rel="noopener">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+          <span>GitHub</span>
+        </a>
       </div>
     </nav>
-
-    <div class="hero-inner" id="top">
-      <p class="eyebrow">Rust workspace · MIT license · macOS · Linux · Windows</p>
-      <h1 class="hero-headline">
-        <span class="typewriter" aria-live="polite">
-          <span class="tw-prefix">spdf</span><span class="tw-sep"> — </span><span class="tw-text" data-phrases='["fast, spatial PDF parsing in Rust.","speedf. a lightning-fast PDF parser.","spacial PDF parser. column-aware by design.","single static binary. PDFium embedded.","OCR built in. Tesseract + HTTP."]'></span><span class="tw-caret" aria-hidden="true">▍</span>
-        </span>
-      </h1>
-      <p class="tagline">
-        Extract text with columns, tables, and layout intact — plus Tesseract
-        OCR for scans and format conversion for Office docs. Ships as a
-        single self-contained binary (PDFium embedded).
-      </p>
-      <div class="cta">
-        <a class="btn primary" href="#install">Install</a>
-        <a class="btn" href="#benchmark">See the benchmark</a>
-        <a class="btn ghost" href="https://github.com/Fanaperana/spdf" rel="noopener">View on GitHub ↗</a>
-      </div>
-      <pre class="snippet" aria-label="install snippet"><code># Linux / macOS
-curl -fsSL https://github.com/Fanaperana/spdf/releases/latest/download/install.sh | sh
-
-# from source
-git clone https://github.com/Fanaperana/spdf &amp;&amp; cd spdf &amp;&amp; make install</code></pre>
-    </div>
   </header>
 
-  <section id="features" class="wrap features">
-    <h2>Why spdf</h2>
-    <p class="lede">
-      Most PDF-to-text tools collapse whitespace, shuffle columns, and emit
-      one giant line-salad. <strong>spdf keeps the geometry.</strong>
-    </p>
-    <div class="grid">
-      <article>
-        <h3>Column-aware projection</h3>
-        <p>
-          Tables, two-column layouts, sidebars, and indented blocks come
-          back in reading order — not a flat string of tokens.
-        </p>
-      </article>
-      <article>
-        <h3>Faux-bold &amp; shadow dedup</h3>
-        <p>
-          PDFs that "draw text twice" to fake bold used to produce
-          <code>TaTax Infofo</code>. spdf outputs <code>Tax Info</code>.
-        </p>
-      </article>
-      <article>
-        <h3>Word reconstruction</h3>
-        <p>
-          Per-glyph extraction is stitched back into words
-          (<code>1 8 3 6</code> → <code>1836</code>) with a liteparse-compatible
-          merge heuristic.
-        </p>
-      </article>
-      <article>
-        <h3>QR / microprint filter</h3>
-        <p>
-          The hundreds of tiny numeric glyphs that encode a QR code are
-          auto-dropped so they don't destroy the surrounding table.
-        </p>
-      </article>
-      <article>
-        <h3>Tesseract OCR, built in</h3>
-        <p>
-          Per-word bboxes, thread-local engine cache for speed, parallel
-          pages via <code>rayon</code>. Or plug any HTTP OCR server.
-        </p>
-      </article>
-      <article>
-        <h3>One static binary</h3>
-        <p>
-          PDFium is embedded at build time (~7.5 MB) and extracted to a
-          user cache on first run. No runtime setup.
-        </p>
-      </article>
-    </div>
-  </section>
+  <main id="main">
+    <!-- HERO ------------------------------------------------------------ -->
+    <section class="hero" id="top">
+      <!-- 21st.dev / Magic UI: Animated Grid Pattern (ported to vanilla SVG) -->
+      <svg class="agp" id="agp" aria-hidden="true"></svg>
+      <div class="hero-glow" aria-hidden="true"></div>
 
-  <section id="benchmark" class="wrap benchmark">
-    <h2>Benchmark</h2>
-    <p class="lede">
-      Head-to-head against
-      <a href="https://github.com/run-llama/liteparse" rel="noopener">LiteParse</a>,
-      a TypeScript PDF parser spdf was inspired by. Ground truth:
-      <code>tesseract &lt;image&gt; - -l eng</code>, with PDFs rendered via
-      <code>pdftoppm -r 150</code>. Tokens compared as a case-insensitive multiset.
-    </p>
-    <p class="muted">
-      This is a like-for-like comparison, not a knock on LiteParse. LiteParse
-      is the reference implementation spdf was designed against, and publishing
-      these numbers is about transparency — not making the TypeScript original
-      look bad.
-    </p>
+      <div class="wrap hero-grid">
+        <div class="hero-copy">
+          <a class="pill" href="#benchmark">
+            <!-- 21st.dev / Magic UI: Animated Shiny Text -->
+            <span class="shiny"><span data-k="tally-pill">125 wins · 36 ties · 1 loss vs LiteParse 2.19.0</span></span>
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3l5 5-5 5" /></svg>
+          </a>
 
-    <div id="benchmark-block" aria-busy="true">
-      <p class="muted">Loading latest benchmark results…</p>
-    </div>
+          <h1>
+            PDF text that keeps <span class="grad">the shape of the page.</span>
+          </h1>
+          <p class="lede">
+            spdf is a Rust CLI and library that pulls text out of PDFs with columns,
+            tables and reading order intact, and reads scans with a built-in
+            PP-OCRv5 engine. One binary. No Python, no Tesseract install.
+          </p>
 
-    <h3 class="sub">Spatial precision</h3>
-    <p class="muted">
-      A spatial parser's job is to put each word in the right place on the
-      page, not just to emit the right tokens. We also compare every matched
-      word's bounding box against the raw-tesseract ground truth and report
-      mean IoU, the fraction of matches that clear the COCO-style IoU ≥ 0.5
-      "well localised" bar, and the mean centroid error in PDF points.
-    </p>
-    <div id="spatial-block" aria-busy="true">
-      <p class="muted">Loading spatial results…</p>
-    </div>
+          <div class="cta">
+            <!-- 21st.dev / Magic UI: Shimmer Button -->
+            <a class="shimmer-btn" href="#quickstart">
+              <span class="spark-wrap" aria-hidden="true"><span class="spark"><span class="spark-cone"></span></span></span>
+              <span class="label">Get started</span>
+              <span class="highlight" aria-hidden="true"></span>
+              <span class="backdrop" aria-hidden="true"></span>
+            </a>
+            <a class="btn ghost" href="#benchmark">See every number</a>
+          </div>
 
-    <p class="muted">
-      Raw outputs are committed under
-      <a href="https://github.com/Fanaperana/spdf/tree/main/benchmark/outputs" rel="noopener"><code>benchmark/outputs/</code></a>. Reproduce locally with
-      <code>LITEPARSE_DIR=/path/to/liteparse ./benchmark/run.sh</code>.
-    </p>
-  </section>
+          <dl class="hero-stats">
+            <div>
+              <dt>faster per document</dt>
+              <!-- 21st.dev / Magic UI: Number Ticker -->
+              <dd><span class="ticker" data-k="speedup" data-dec="1">2.2</span>×</dd>
+              <p class="vs"><span data-k="sec-pair">0.043 s vs 0.094 s</span></p>
+            </div>
+            <div>
+              <dt>less peak memory</dt>
+              <dd><span class="ticker" data-k="memsave" data-dec="0">42</span>%</dd>
+              <p class="vs"><span data-k="rss-pair">30.8 MB vs 53.1 MB</span></p>
+            </div>
+            <div>
+              <dt>OCR text accuracy</dt>
+              <dd><span class="ticker" data-k="ocrnid" data-dec="3">0.990</span></dd>
+              <p class="vs"><span data-k="ocr-pair">vs 0.749 (NID)</span></p>
+            </div>
+          </dl>
+        </div>
 
-  <section id="install" class="wrap install">
-    <h2>Install</h2>
-    <div class="grid two">
-      <article>
-        <h3>From source</h3>
-        <pre><code>git clone https://github.com/Fanaperana/spdf
+        <!-- 21st.dev / Magic UI: Terminal (typing animation), wrapped in Border Beam -->
+        <div class="term beam-host" role="img" aria-label="Terminal: install spdf with cargo, then parse a PDF to Markdown and to JSON, and OCR a scan">
+          <span class="border-beam" aria-hidden="true"><span class="beam"></span></span>
+          <div class="term-bar"><i></i><i></i><i></i><span>~/docs</span></div>
+          <pre class="term-body" id="term" aria-hidden="true"><code><span class="t-line"><span class="p">$</span> cargo install --git https://github.com/Fanaperana/spdf --locked spdf-cli</span>
+<span class="t-line t-out">  Installed package `spdf-cli` (executable `spdf`)</span>
+<span class="t-line"><span class="p">$</span> spdf parse report.pdf --format markdown</span>
+<span class="t-line t-out"># columns, tables and headings, in reading order</span>
+<span class="t-line"><span class="p">$</span> spdf parse report.pdf --format json -o report.json</span>
+<span class="t-line t-out"># every text item with its bounding box</span>
+<span class="t-line"><span class="p">$</span> spdf parse scan.pdf</span>
+<span class="t-line t-out t-ok">✓ OCR runs automatically on image-only pages</span></code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- BENCHMARK ------------------------------------------------------- -->
+    <section class="section" id="benchmark" aria-labelledby="bench-h">
+      <div class="wrap">
+        <p class="kicker">Benchmark</p>
+        <h2 id="bench-h">Head to head with LiteParse 2.19.0</h2>
+        <p class="sub">
+          Same PDFs, same machine, both engines run through their CLIs with default settings.
+          Every metric we track is shown here, including the one we still lose.
+          Numbers come straight from
+          <a href="https://github.com/Fanaperana/spdf/blob/main/bench/results/latest.json" rel="noopener"><code>bench/results/latest.json</code></a>.
+        </p>
+
+        <div class="tally beam-host">
+          <span class="border-beam" aria-hidden="true"><span class="beam"></span></span>
+          <div class="tally-nums">
+            <div class="t-win"><span class="ticker big" data-k="wins" data-dec="0">125</span><span>wins</span></div>
+            <div class="t-tie"><span class="ticker big" data-k="ties" data-dec="0">36</span><span>ties</span></div>
+            <div class="t-loss"><span class="ticker big" data-k="losses" data-dec="0">1</span><span>loss</span></div>
+          </div>
+          <div class="tally-bar" role="img" data-k="tally-bar-label" aria-label="125 wins, 36 ties, 1 loss out of 162 metrics">
+            <span class="seg win" style="flex:125"></span><span class="seg tie" style="flex:36"></span><span class="seg loss" style="flex:1"></span>
+          </div>
+          <p class="tally-note">
+            <span data-k="total">162</span> tracked metrics: accuracy, latency and peak memory on
+            200 real-world PDFs, plus score, time and memory for each of
+            <span data-k="cases">46</span> edge cases. A tie means within the noise band
+            (for example both engines score 1.00, or times within 3%).
+          </p>
+        </div>
+
+        <!-- 21st.dev / Magic UI: Magic Card (cursor spotlight) -->
+        <div class="cards" id="metric-cards">
+          <!-- filled by app.js; static fallback below -->
+          <noscript><p class="muted">Enable JavaScript for the interactive charts. The full table is in
+            <a href="https://github.com/Fanaperana/spdf/blob/main/bench/RESULTS.md">bench/RESULTS.md</a>.</p></noscript>
+        </div>
+
+        <article class="loss-card" aria-labelledby="loss-h">
+          <div class="loss-head">
+            <span class="badge loss">The one loss</span>
+            <h3 id="loss-h">Scanned Chinese page: <span data-k="loss-sec">0.338 s vs 0.297 s</span></h3>
+          </div>
+          <p>
+            On the single-page scanned Chinese document, LiteParse finishes about
+            <strong data-k="loss-delta">41 ms (14%)</strong> sooner. That is the only metric out of
+            <span data-k="total2">162</span> where spdf is behind. On the same document spdf
+            reads the text correctly (score <strong data-k="loss-acc-s">1.00</strong> vs
+            <strong data-k="loss-acc-l">0.04</strong>) and uses less memory
+            (<span data-k="loss-mem">67.0 MB vs 85.5 MB</span>). spdf runs a larger
+            CJK recogniser on Chinese lines, which costs time.
+          </p>
+        </article>
+
+        <details class="all-metrics">
+          <summary>All <span data-k="total3">162</span> metrics, one row each</summary>
+          <div class="filters" role="group" aria-label="Filter metrics">
+            <button type="button" class="chip on" data-f="all">All</button>
+            <button type="button" class="chip" data-f="win">Wins</button>
+            <button type="button" class="chip" data-f="tie">Ties</button>
+            <button type="button" class="chip" data-f="loss">Loss</button>
+            <label class="search"><span class="sr">Search metrics</span><input id="metric-q" type="search" placeholder="Search, e.g. scanned" /></label>
+          </div>
+          <div class="table-wrap">
+            <table id="metric-table">
+              <caption class="sr">Every tracked metric, spdf vs LiteParse 2.19.0</caption>
+              <thead><tr><th scope="col">Metric</th><th scope="col">Better</th><th scope="col" class="num">spdf</th><th scope="col" class="num">LiteParse</th><th scope="col">Result</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <!-- OCR ------------------------------------------------------------- -->
+    <section class="section" id="ocr" aria-labelledby="ocr-h">
+      <div class="wrap">
+        <p class="kicker">OCR</p>
+        <h2 id="ocr-h">Scans are read by a neural OCR engine compiled into the binary</h2>
+        <p class="sub">
+          PaddleOCR's PP-OCRv5 detection and recognition models, compiled to native Rust with
+          <a href="https://burn.dev" rel="noopener">Burn</a>. spdf runs OCR automatically when a page
+          has no text layer; <code>--no-ocr</code> turns it off.
+        </p>
+
+        <!-- 21st.dev / Magic UI: Bento Grid -->
+        <div class="bento">
+          <article class="bento-card span-2">
+            <div class="bento-bg scan-viz" aria-hidden="true">
+              <svg viewBox="0 0 380 190" preserveAspectRatio="xMinYMid meet">
+                <g class="scan-lines">
+                  <rect x="40" y="30" width="230" height="10" rx="2" /><rect x="40" y="52" width="300" height="10" rx="2" />
+                  <rect x="40" y="74" width="270" height="10" rx="2" /><rect x="40" y="96" width="180" height="10" rx="2" />
+                  <rect x="40" y="128" width="290" height="10" rx="2" /><rect x="40" y="150" width="250" height="10" rx="2" />
+                </g>
+                <g class="det-boxes">
+                  <rect x="34" y="25" width="242" height="20" rx="3" /><rect x="34" y="47" width="312" height="20" rx="3" />
+                  <rect x="34" y="69" width="282" height="20" rx="3" /><rect x="34" y="91" width="192" height="20" rx="3" />
+                  <rect x="34" y="123" width="302" height="20" rx="3" /><rect x="34" y="145" width="262" height="20" rx="3" />
+                </g>
+                <rect class="scan-beam" x="0" y="0" width="420" height="3" />
+              </svg>
+            </div>
+            <div class="bento-body">
+              <h3>Detect, orient, recognise</h3>
+              <p>Text lines are detected, the page's reading direction (0/90/180/270° plus skew)
+                is estimated, and each line is recognised along its own rotated box, so tilted
+                and sideways scans come out as straight text with word boxes.</p>
+              <ul class="mini-stats">
+                <li><b data-k="ocr-nid-s">0.990</b><span>OCR text accuracy (NID)</span><em>LiteParse <span data-k="ocr-nid-l">0.749</span></em></li>
+                <li><b data-k="ocr-sec-s">0.367 s</b><span>mean time per scanned PDF</span><em>LiteParse <span data-k="ocr-sec-l">0.474 s</span></em></li>
+                <li><b data-k="ocr-rss-s">57 MB</b><span>mean peak memory on scans</span><em>LiteParse <span data-k="ocr-rss-l">90 MB</span></em></li>
+              </ul>
+            </div>
+          </article>
+
+          <article class="bento-card">
+            <div class="bento-body">
+              <div class="bento-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg></div>
+              <h3>CPU, wgpu or CUDA</h3>
+              <p>Short scans run on the CPU, where start-up is cheapest. Long jobs use the GPU through
+                wgpu (Vulkan, DX12, Metal). Force a backend with
+                <code>SPDF_OCR_DEVICE=cpu|wgpu|cuda</code>; CUDA needs the
+                <code>neural-ocr-cuda</code> feature.</p>
+            </div>
+          </article>
+
+          <article class="bento-card">
+            <div class="bento-body">
+              <div class="bento-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg></div>
+              <h3>Weights embedded at build time</h3>
+              <p>Model files are downloaded once, checked against pinned SHA-256 hashes, cached in
+                <code>%LOCALAPPDATA%\spdf\models</code> (Windows) or <code>~/.cache/spdf/models</code>,
+                and compiled into the binary. Nothing to install at run time.</p>
+            </div>
+          </article>
+
+          <article class="bento-card span-2">
+            <div class="bento-body">
+              <div class="bento-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></div>
+              <h3>Where the difference shows</h3>
+              <p>Edge-case scans where spdf reads the page and LiteParse's default OCR struggles (score, 1.00 = all text recovered):</p>
+              <div class="case-bars" id="case-bars">
+                <!-- filled by app.js -->
+              </div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- QUICKSTART ------------------------------------------------------ -->
+    <section class="section" id="quickstart" aria-labelledby="qs-h">
+      <div class="wrap">
+        <p class="kicker">Quickstart</p>
+        <h2 id="qs-h">From zero to parsed PDF</h2>
+        <p class="sub">
+          The benchmarked build is <code>main</code>. It needs a current stable Rust toolchain (<code>rustup update stable</code>). The first build downloads PDFium and the OCR
+          models, then compiles them in. The crates.io release (0.2.0-alpha.2) predates the built-in OCR engine.
+        </p>
+
+        <ol class="steps">
+          <li>
+            <div><h3>Install</h3><p class="muted small">Builds the <code>spdf</code> binary from <code>main</code> with OCR included.</p></div>
+            <div class="code beam-host"><button class="copy" type="button" aria-label="Copy install command">Copy</button>
+<pre><code>cargo install --git https://github.com/Fanaperana/spdf --locked spdf-cli</code></pre></div>
+          </li>
+          <li>
+            <div><h3>Parse</h3><p class="muted small">Text by default; Markdown or JSON with <code>--format</code>. Output goes to stdout unless you pass <code>-o</code>.</p></div>
+            <div class="code"><button class="copy" type="button" aria-label="Copy parse commands">Copy</button>
+<pre><code><span class="c"># layout-preserving plain text (default)</span>
+spdf parse report.pdf
+
+<span class="c"># Markdown: headings and tables</span>
+spdf parse report.pdf --format markdown -o report.md
+
+<span class="c"># JSON with a bounding box for every text item</span>
+spdf parse report.pdf --format json -o report.json</code></pre></div>
+          </li>
+          <li>
+            <div><h3>Scans and OCR</h3><p class="muted small">Image-only pages are OCR'd automatically. Nothing extra to install.</p></div>
+            <div class="code"><button class="copy" type="button" aria-label="Copy OCR commands">Copy</button>
+<pre><code><span class="c"># OCR is on by default for pages without a text layer</span>
+spdf parse scan.pdf --format markdown
+
+<span class="c"># born-digital PDF? skip OCR entirely</span>
+spdf parse report.pdf --no-ocr
+
+<span class="c"># pick the OCR backend explicitly</span>
+SPDF_OCR_DEVICE=wgpu spdf parse long-scan.pdf</code></pre></div>
+          </li>
+        </ol>
+        <p class="muted small">
+          Also: <code>--target-pages 1-3,7</code>, <code>--password</code>, <code>--detect-tables</code>,
+          <code>--stream</code>, <code>spdf batch-parse in/ out/</code>, <code>spdf screenshot</code>.
+          Run <code>spdf parse --help</code> for the full list, or use the
+          <a href="https://docs.rs/spdf-core" rel="noopener">Rust library API</a>.
+        </p>
+      </div>
+    </section>
+
+    <!-- METHOD ---------------------------------------------------------- -->
+    <section class="section" id="method" aria-labelledby="method-h">
+      <div class="wrap method">
+        <div>
+          <p class="kicker">Methodology</p>
+          <h2 id="method-h">How the numbers are made</h2>
+          <ul class="method-list">
+            <li><b>Corpus.</b> <a href="https://github.com/opendataloader-project/opendataloader-bench" rel="noopener">opendataloader-bench</a>:
+              200 real PDFs with Markdown ground truth (reading order NID, tables TEDS, headings MHS), plus
+              <span data-k="cases2">46</span> generated edge cases: multi-column, rotated pages, RTL and CJK scripts,
+              encrypted and corrupt files, image-only scans and a 400-page document.</li>
+            <li><b>Process.</b> Both engines run through their CLIs, one process per document, so start-up and model load
+              are included. One untimed warm-up, then the median of <span data-k="repeats">3</span> runs.</li>
+            <li><b>Memory.</b> Peak RSS is the larger of polled RSS (including child processes) and the process's exact
+              peak working set.</li>
+            <li><b>OCR engines differ.</b> LiteParse 2.19.0 uses bundled Tesseract on the CPU; spdf uses PP-OCRv5 on Burn.
+              Same inputs, same default invocation, same machine.</li>
+            <li><b>Bands.</b> A result within the noise band is a tie (0.0005 on accuracy aggregates, 3% on time and memory).
+              A change is only accepted if no spdf metric regresses.</li>
+          </ul>
+          <p class="muted small" data-k="run-meta">Accepted run 2026-11-23 · spdf 0.2.0-alpha.2 (main) · lit 2.19.0 · median of 3 · one Windows machine</p>
+        </div>
+        <div class="repro">
+          <h3>Reproduce it</h3>
+          <div class="code"><button class="copy" type="button" aria-label="Copy reproduce commands">Copy</button>
+<pre><code>git clone https://github.com/Fanaperana/spdf
 cd spdf
-make install       # release build + copy to ~/.local/bin</code></pre>
-      </article>
-      <article>
-        <h3>With OCR</h3>
-        <pre><code># Debian / Ubuntu
-sudo apt-get install -y libtesseract-dev libleptonica-dev \
-                        clang tesseract-ocr tesseract-ocr-eng
-make install-ocr</code></pre>
-      </article>
-    </div>
-  </section>
+pwsh bench/setup.ps1
+bench/.venv/Scripts/python bench/run_bench.py
+bench/.venv/Scripts/python bench/scoreboard.py show bench/.cache/candidate.json</code></pre></div>
+          <p class="muted small">Harness, scorer and per-run history:
+            <a href="https://github.com/Fanaperana/spdf/tree/main/bench" rel="noopener"><code>bench/</code></a> ·
+            <a href="https://github.com/Fanaperana/spdf/blob/main/bench/RESULTS.md" rel="noopener">RESULTS.md</a></p>
+        </div>
+      </div>
+    </section>
+  </main>
 
-  <section id="quickstart" class="wrap quickstart">
-    <h2>Quick start</h2>
-    <pre><code># Plain text with preserved layout
-spdf parse invoice.pdf --no-ocr --format text
-
-# Structured JSON with per-glyph bounding boxes
-spdf parse invoice.pdf --format json &gt; out.json
-
-# OCR a scanned PDF (uses embedded Tesseract)
-spdf parse scan.pdf --ocr-language eng
-
-# Use an external OCR server instead
-spdf parse scan.pdf --ocr-server-url http://localhost:8000
-
-# Batch convert a directory
-spdf batch-parse ./inputs ./outputs --format text</code></pre>
-  </section>
-
-  <footer>
-    <div class="wrap">
-      <p>
+  <footer class="footer">
+    <div class="wrap foot">
+      <span>spdf · MIT · built in Rust</span>
+      <nav aria-label="Footer">
         <a href="https://github.com/Fanaperana/spdf" rel="noopener">GitHub</a>
-        ·
-        <a href="https://github.com/Fanaperana/spdf/blob/main/LICENSE" rel="noopener">MIT License</a>
-        · built with Rust
-      </p>
+        <a href="https://docs.rs/spdf-core" rel="noopener">docs.rs</a>
+        <a href="https://crates.io/crates/spdf-cli" rel="noopener">crates.io</a>
+        <a href="https://github.com/Fanaperana/spdf/blob/main/CHANGELOG.md" rel="noopener">Changelog</a>
+      </nav>
+      <span class="muted small">spdf is an independent project inspired by
+        <a href="https://github.com/run-llama/liteparse" rel="noopener">LiteParse</a>. UI components ported from
+        <a href="https://21st.dev/@dillionverma/library/magic-ui" rel="noopener">Magic UI on 21st.dev</a> (MIT).</span>
     </div>
   </footer>
 
-  <script src="./benchmark.js" defer></script>
-  <script src="./typewriter.js" defer></script>
+  <script src="./app.js" defer></script>
 </body>
-
 </html>
