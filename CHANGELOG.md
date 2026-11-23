@@ -13,6 +13,8 @@ All notable changes to `spdf` land here. We follow
   overrides `rust-toolchain.toml`, which had silently turned it into a
   stable check) and uses `--locked`.
 - Docs: the `edge` benchmark suite has 46 cases, not 48.
+- Project page (`website/`) redesigned; `pages.yml` now only builds and
+  deploys the static site (the weekly benchmark rebuild is gone).
 
 ## [0.2.0-alpha.2] — 2026-04-19
 
