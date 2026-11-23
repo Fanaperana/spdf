@@ -27,6 +27,7 @@
 pub mod ctc;
 #[cfg(test)]
 mod fold;
+mod fpmode;
 pub mod geom;
 mod head;
 mod resident;
@@ -1206,6 +1207,11 @@ fn cpu_pool() -> Option<rayon::ThreadPool> {
     rayon::ThreadPoolBuilder::new()
         .num_threads(cpu_threads())
         .thread_name(|i| format!("spdf-nn-{i}"))
+        // Subnormal weights / activations otherwise slow every SIMD kernel
+        // down by an order of magnitude (see `fpmode`).
+        .start_handler(|_| {
+            fpmode::flush_subnormals();
+        })
         .build()
         .ok()
 }
