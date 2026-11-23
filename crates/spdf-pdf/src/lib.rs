@@ -19,7 +19,7 @@ mod pdfium_engine;
 mod rtl;
 mod segtext;
 
-pub use engine::{ExtractOptions, PageData, PdfDocumentHandle, PdfEngine};
+pub use engine::{ExtractOptions, PageData, PdfDocumentHandle, PdfEngine, RgbPixels};
 
 #[cfg(feature = "pdfium")]
 pub use pdfium_engine::PdfiumEngine;

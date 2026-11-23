@@ -303,6 +303,38 @@ impl PdfEngine for PdfiumEngine {
             Ok(buf)
         })
     }
+
+    fn render_page_rgb(
+        &self,
+        doc: &Self::Doc,
+        page_num: u32,
+        dpi: u32,
+    ) -> SpdfResult<crate::engine::RgbPixels> {
+        self.with_doc(doc, |pdf| {
+            let page_idx: u16 = (page_num
+                .checked_sub(1)
+                .ok_or_else(|| SpdfError::InvalidInput("page numbers are 1-indexed".into()))?)
+                as u16;
+            let page = pdf
+                .pages()
+                .get(page_idx.into())
+                .map_err(|e| SpdfError::Pdf(format!("page {page_num}: {e:?}")))?;
+            let cfg = PdfRenderConfig::new().scale_page_by_factor(dpi as f32 / 72.0);
+            let bitmap = page
+                .render_with_config(&cfg)
+                .map_err(|e| SpdfError::Pdf(format!("render page {page_num}: {e:?}")))?;
+            // No PNG round trip: OCR wants the pixels.
+            let (w, h) = (bitmap.width() as usize, bitmap.height() as usize);
+            let rgba = bitmap.as_rgba_bytes();
+            drop(bitmap);
+            if rgba.len() < w * h * 4 {
+                return Err(SpdfError::Pdf(format!(
+                    "render page {page_num}: unexpected bitmap layout"
+                )));
+            }
+            Ok(crate::engine::RgbPixels::from_rgba(w, h, &rgba))
+        })
+    }
 }
 
 /// Extract one page from an already opened document.

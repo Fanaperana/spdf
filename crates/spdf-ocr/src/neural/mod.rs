@@ -28,6 +28,8 @@ pub mod ctc;
 #[cfg(test)]
 mod fold;
 pub mod geom;
+mod head;
+mod resident;
 
 use std::sync::{Mutex, OnceLock};
 
@@ -35,7 +37,7 @@ use spdf_types::{SpdfError, SpdfResult};
 
 use crate::engine::{OcrEngine, OcrOptions, OcrResult};
 use ctc::Charset;
-use geom::{DbParams, DetBox, Rgb, RotRect};
+use geom::{DbParams, DetBox, PixRect, Rgb, RotRect};
 
 #[cfg(spdf_neural_models)]
 #[allow(clippy::all, unused)]
@@ -93,6 +95,13 @@ const DET_FAST_SIDE: usize = 1280;
 /// found by the fast pass is shorter than this in detector pixels, the page
 /// has small print: detect again at full size.
 const DET_MIN_LINE_H: f64 = 14.0;
+/// Context kept around the page content when detecting on its bounding
+/// box, in detector pixels, so text near the crop edge sees the same blank
+/// surroundings as on the full page.
+const DET_CROP_MARGIN: f64 = 32.0;
+/// Detect on the content's bounding box only when that skips at least this
+/// share of the page area; otherwise use the whole page.
+const DET_CROP_MIN_SAVING: f64 = 0.1;
 /// Width cap (in multiples of the line height) of the crops used for the
 /// reading-direction vote; a dozen glyphs settle it as well as a full line.
 const ORIENT_MAX_ASPECT: f64 = 10.0;
@@ -163,17 +172,33 @@ impl OcrEngine for NeuralOcrEngine {
             .store(pages, std::sync::atomic::Ordering::Relaxed);
     }
 
-    fn recognize(&self, image: &[u8], _options: &OcrOptions) -> SpdfResult<Vec<OcrResult>> {
-        let rt = self.runtime()?;
+    fn recognize(&self, image: &[u8], options: &OcrOptions) -> SpdfResult<Vec<OcrResult>> {
         let img = image::load_from_memory(image)
             .map_err(|e| SpdfError::Ocr(format!("decode page image: {e}")))?
             .to_rgb8();
         let (w, h) = (img.width() as usize, img.height() as usize);
-        let rgb = Rgb {
-            data: img.as_raw(),
-            w,
-            h,
-        };
+        self.recognize_rgb(img.as_raw(), w, h, options)
+    }
+
+    fn accepts_rgb(&self) -> bool {
+        true
+    }
+
+    fn recognize_rgb(
+        &self,
+        data: &[u8],
+        w: usize,
+        h: usize,
+        _options: &OcrOptions,
+    ) -> SpdfResult<Vec<OcrResult>> {
+        if data.len() < w * h * 3 {
+            return Err(SpdfError::Ocr(format!(
+                "{} bytes for a {w}x{h} RGB image",
+                data.len()
+            )));
+        }
+        let rt = self.runtime()?;
+        let rgb = Rgb { data, w, h };
         // A poisoned lock only means another page panicked; the models are
         // read-only, so carry on.
         let _page = self.page_lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -259,6 +284,82 @@ static REC_LATIN_BPK: &Aligned<[u8]> = &Aligned(*include_bytes!(concat!(
     "/model/latin_PP-OCRv5_rec_mobile.bpk"
 )));
 
+/// The models of the OCR pipeline.
+#[derive(Clone, Copy)]
+#[cfg_attr(not(spdf_neural_models), allow(dead_code))]
+enum OcrModel {
+    /// Text detector.
+    Det,
+    /// Fast multilingual recogniser, read on every line.
+    Mobile,
+    /// Server recogniser, re-reads CJK lines.
+    Server,
+    /// Latin recogniser, re-reads non-CJK lines.
+    Latin,
+}
+
+/// A recogniser's output classifier, when the build detached it from the
+/// graph (see `head.rs`); the model then returns per-step features. Parsing
+/// is a header check: the weights stay in the binary's read-only data.
+#[cfg(spdf_neural_models)]
+fn rec_head(which: OcrModel) -> SpdfResult<Option<head::CtcHead<'static>>> {
+    head_bytes(which)
+        .map(|bytes| head::CtcHead::parse(bytes).map_err(SpdfError::Ocr))
+        .transpose()
+}
+
+/// The packed classifier of a recogniser, when the build detached it.
+#[cfg(spdf_neural_models)]
+fn head_bytes(which: OcrModel) -> Option<&'static [u8]> {
+    #[cfg(spdf_rec_head)]
+    {
+        static MOBILE: &Aligned<[u8]> = &Aligned(*include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/model/ch_PP-OCRv5_rec_mobile.head"
+        )));
+        static SERVER: &Aligned<[u8]> = &Aligned(*include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/model/ch_PP-OCRv5_rec_server.head"
+        )));
+        static LATIN: &Aligned<[u8]> = &Aligned(*include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/model/latin_PP-OCRv5_rec_mobile.head"
+        )));
+        match which {
+            OcrModel::Det => None,
+            OcrModel::Mobile => Some(&MOBILE.0),
+            OcrModel::Server => Some(&SERVER.0),
+            OcrModel::Latin => Some(&LATIN.0),
+        }
+    }
+    #[cfg(not(spdf_rec_head))]
+    {
+        let _ = which;
+        None
+    }
+}
+
+/// Drop the resident pages of a model's embedded weights (see
+/// [`resident`]): called when the page no longer needs that model, so its
+/// weights do not sit under the next stage's peak. Tensors alias those
+/// pages, so the next page that uses the model faults them back in.
+fn release_weights(model: OcrModel) {
+    #[cfg(spdf_neural_models)]
+    {
+        resident::release(match model {
+            OcrModel::Det => &DET_BPK.0,
+            OcrModel::Mobile => &REC_BPK.0,
+            OcrModel::Server => &REC_SERVER_BPK.0,
+            OcrModel::Latin => &REC_LATIN_BPK.0,
+        });
+        if let Some(head) = head_bytes(model) {
+            resident::release(head);
+        }
+    }
+    #[cfg(not(spdf_neural_models))]
+    let _ = model;
+}
+
 /// Load a model's weights straight from the binary's read-only data: on the
 /// CPU backend the tensors alias those pages instead of copying them (the
 /// server recogniser alone is ~85 MB).
@@ -288,6 +389,9 @@ impl Runtime {
             step_maxima,
         );
         let _ = (REC_OUTPUT_LOGITS, Mutex::new(()));
+        // Only the model-backed paths use these.
+        let _ = (det_region, scale_rect, Self::parallel, DbParams::default);
+        let _ = REC_CPU_INFLIGHT_COLS;
         Err("neural OCR models were not available when spdf was built".into())
     }
 
@@ -330,7 +434,12 @@ impl Runtime {
     }
 
     #[cfg(not(spdf_neural_models))]
-    fn detect(&self, _img: &Rgb<'_>, _max_side: usize) -> SpdfResult<(Vec<DetBox>, f64)> {
+    fn detect(
+        &self,
+        _img: &Rgb<'_>,
+        _max_side: usize,
+        _ink: Option<PixRect>,
+    ) -> SpdfResult<(Vec<DetBox>, f64)> {
         Err(SpdfError::Ocr("neural OCR unavailable".into()))
     }
 
@@ -350,13 +459,20 @@ impl Runtime {
     }
 
     /// Run the detector on the image scaled so its longest side is at most
-    /// `max_side`. Boxes come back in image pixel coordinates, together with
-    /// the detector-to-image scale factor.
+    /// `max_side`; only on the part holding `ink` (see [`det_region`]) when
+    /// that is much smaller than the page. Boxes come back in image pixel
+    /// coordinates, together with the detector-to-image scale factor.
     #[cfg(spdf_neural_models)]
-    fn detect(&self, img: &Rgb<'_>, max_side: usize) -> SpdfResult<(Vec<DetBox>, f64)> {
+    fn detect(
+        &self,
+        img: &Rgb<'_>,
+        max_side: usize,
+        ink: Option<PixRect>,
+    ) -> SpdfResult<(Vec<DetBox>, f64)> {
         use burn::prelude::*;
-        let (dw, dh) = det_size(img.w, img.h, max_side);
-        let input = det_input(img, dw, dh);
+        let region = det_region(img.w, img.h, max_side, ink);
+        let (dw, dh) = det_dims(&region, det_scale(img.w, img.h, max_side));
+        let input = det_input(img, &region, dw, dh);
         let prob: Vec<f32> = {
             let m = &self.models;
             let x = Tensor::<4>::from_data(TensorData::new(input, [1, 3, dh, dw]), &m.device);
@@ -372,11 +488,14 @@ impl Runtime {
                 dw * dh
             )));
         }
-        let (sx, sy) = (img.w as f64 / dw as f64, img.h as f64 / dh as f64);
+        let sx = region.width() as f64 / dw as f64;
+        let sy = region.height() as f64 / dh as f64;
         let mut boxes = geom::db_boxes(&prob, dw, dh, &DbParams::default());
         for b in &mut boxes {
             for r in [&mut b.rect, &mut b.core] {
                 *r = scale_rect(r, sx, sy);
+                r.cx += region.x0 as f64;
+                r.cy += region.y0 as f64;
             }
         }
         Ok((boxes, (sx + sy) / 2.0))
@@ -385,15 +504,16 @@ impl Runtime {
     /// Detect text lines: a fast pass on a downscaled page, repeated at
     /// full size only when that pass finds nothing or mostly small print.
     fn detect_adaptive(&self, img: &Rgb<'_>) -> SpdfResult<Vec<DetBox>> {
+        let ink = geom::ink_bounds(img);
         if det_size(img.w, img.h, DET_FAST_SIDE) == det_size(img.w, img.h, DET_MAX_SIDE) {
-            return Ok(self.detect(img, DET_MAX_SIDE)?.0);
+            return Ok(self.detect(img, DET_MAX_SIDE, ink)?.0);
         }
-        let (boxes, scale) = self.detect(img, DET_FAST_SIDE)?;
+        let (boxes, scale) = self.detect(img, DET_FAST_SIDE, ink)?;
         if !needs_full_res(&boxes, scale) {
             return Ok(boxes);
         }
         tracing::debug!(n = boxes.len(), "ocr: small print, detecting at full size");
-        Ok(self.detect(img, DET_MAX_SIDE)?.0)
+        Ok(self.detect(img, DET_MAX_SIDE, ink)?.0)
     }
 
     /// Recognise normalised-height crops (`REC_H` rows, CHW RGB 0..255)
@@ -401,9 +521,15 @@ impl Runtime {
     #[cfg(spdf_neural_models)]
     fn recognize_crops(&self, crops: &[(Vec<f32>, usize)]) -> SpdfResult<Vec<LineRec>> {
         let m = &self.models;
-        run_rec(self.parallel(), &m.device, &self.charset, crops, |x| {
-            m.rec.forward(x)
-        })
+        let head = rec_head(OcrModel::Mobile)?;
+        run_rec(
+            self.parallel(),
+            &m.device,
+            &self.charset,
+            head.as_ref(),
+            crops,
+            |x| m.rec.forward(x),
+        )
     }
 
     /// Recognise crops with the larger server recogniser (loaded lazily).
@@ -413,9 +539,15 @@ impl Runtime {
         let rec = m.rec_server.get_or_init(|| {
             load_static(rec_server_model::Model::new(&m.device), &REC_SERVER_BPK.0)
         });
-        run_rec(self.parallel(), &m.device, &self.charset, crops, |x| {
-            rec.forward(x)
-        })
+        let head = rec_head(OcrModel::Server)?;
+        run_rec(
+            self.parallel(),
+            &m.device,
+            &self.charset,
+            head.as_ref(),
+            crops,
+            |x| rec.forward(x),
+        )
     }
 
     /// Recognise crops with the Latin recogniser (loaded lazily).
@@ -425,10 +557,12 @@ impl Runtime {
         let rec = m
             .rec_latin
             .get_or_init(|| load_static(rec_latin_model::Model::new(&m.device), &REC_LATIN_BPK.0));
+        let head = rec_head(OcrModel::Latin)?;
         run_rec(
             self.parallel(),
             &m.device,
             &self.latin_charset,
+            head.as_ref(),
             crops,
             |x| rec.forward(x),
         )
@@ -450,6 +584,7 @@ impl Runtime {
         }
         let sub: Vec<(Vec<f32>, usize)> = idx.iter().map(|&i| crops[i].clone()).collect();
         let latin = self.recognize_crops_latin(&sub)?;
+        release_weights(OcrModel::Latin);
         for (i, l) in idx.into_iter().zip(latin) {
             if l.content_steps != recs[i].content_steps {
                 continue;
@@ -474,6 +609,7 @@ impl Runtime {
         }
         let sub: Vec<(Vec<f32>, usize)> = idx.iter().map(|&i| crops[i].clone()).collect();
         let better = self.recognize_crops_server(&sub)?;
+        release_weights(OcrModel::Server);
         for (i, r) in idx.into_iter().zip(better) {
             if !r.chars.is_empty() {
                 recs[i] = r;
@@ -492,6 +628,7 @@ fn run_rec(
     parallel: bool,
     device: &burn::prelude::Device,
     charset: &Charset,
+    head: Option<&head::CtcHead<'_>>,
     crops: &[(Vec<f32>, usize)],
     forward: impl Fn(burn::prelude::Tensor<4>) -> burn::prelude::Tensor<3> + Sync,
 ) -> SpdfResult<Vec<LineRec>> {
@@ -505,7 +642,7 @@ fn run_rec(
         chunks.push(&order[start..start + len]);
         start += len;
     }
-    let run = |chunk: &&[usize]| rec_batch(device, charset, crops, chunk, &forward);
+    let run = |chunk: &&[usize]| rec_batch(device, charset, head, crops, chunk, &forward);
     let mut out: Vec<Option<LineRec>> = (0..crops.len()).map(|_| None).collect();
     if parallel {
         // Concurrent batches each hold their activations, so run them in
@@ -606,6 +743,7 @@ fn rec_waves(cols: &[usize], budget: usize) -> Vec<usize> {
 fn rec_batch(
     device: &burn::prelude::Device,
     charset: &Charset,
+    head: Option<&head::CtcHead<'_>>,
     crops: &[(Vec<f32>, usize)],
     chunk: &[usize],
     forward: &impl Fn(burn::prelude::Tensor<4>) -> burn::prelude::Tensor<3>,
@@ -636,10 +774,13 @@ fn rec_batch(
     }
     let x = Tensor::<4>::from_data(TensorData::new(data, [b, 3, REC_H, bw]), device);
     let y = forward(x);
-    let [_, steps, classes] = y.dims();
-    if classes != charset.num_classes() {
+    let [_, steps, width] = y.dims();
+    // Without a detached head the model returns one score per class; with
+    // one, the classifier's input features.
+    let classes = head.map_or(width, |h| h.classes());
+    if classes != charset.num_classes() || head.is_some_and(|h| h.features() != width) {
         return Err(SpdfError::Ocr(format!(
-            "rec model has {classes} classes, dictionary expects {}",
+            "rec model has {classes} classes ({width} outputs per step), dictionary expects {}",
             charset.num_classes()
         )));
     }
@@ -647,26 +788,40 @@ fn rec_batch(
         .into_data()
         .try_to_vec::<f32>()
         .map_err(|e| SpdfError::Ocr(format!("rec output: {e:?}")))?;
-    let (idx, probs) = step_maxima(&scores, classes, REC_OUTPUT_LOGITS);
-    drop(scores);
-    let mut out = Vec::with_capacity(b);
-    for (bi, &i) in chunk.iter().enumerate() {
-        let r = bi * steps..(bi + 1) * steps;
+    let decode = |bi: usize, i: usize| {
         let content_steps = (crops[i].1 * steps).div_ceil(bw).clamp(1, steps);
-        let chars = ctc::greedy_decode(
-            &idx[r.clone()][..content_steps],
-            &probs[r][..content_steps],
-            charset,
-        );
-        out.push((
+        let rows = &scores[bi * steps * width..(bi + 1) * steps * width];
+        // Padding steps are never decoded, so never classified either.
+        let (idx, probs) = match head {
+            Some(h) => h.decode(rows, content_steps),
+            None => step_maxima(&rows[..content_steps * width], width, REC_OUTPUT_LOGITS),
+        };
+        let chars = ctc::greedy_decode(&idx, &probs, charset);
+        (
             i,
             LineRec {
                 chars,
                 content_steps,
             },
-        ));
-    }
-    Ok(out)
+        )
+    };
+    Ok(match head {
+        // Classifying is a large share of the work: spread the crops over
+        // the pool (on the CPU backend this nests inside the batch waves).
+        Some(_) if b > 1 => {
+            use rayon::prelude::*;
+            chunk
+                .par_iter()
+                .enumerate()
+                .map(|(bi, &i)| decode(bi, i))
+                .collect()
+        }
+        _ => chunk
+            .iter()
+            .enumerate()
+            .map(|(bi, &i)| decode(bi, i))
+            .collect(),
+    })
 }
 
 /// Batch lengths for recognising crops sorted by width: GPU batches are
@@ -734,6 +889,9 @@ impl Runtime {
     fn ocr_page(&self, img: &Rgb<'_>) -> SpdfResult<Vec<OcrResult>> {
         let t = std::time::Instant::now();
         let boxes = self.detect_adaptive(img)?;
+        // Each model's weights are released as soon as the page is done
+        // with it, so they do not add to a later stage's peak.
+        release_weights(OcrModel::Det);
         tracing::debug!(
             ms = t.elapsed().as_millis() as u64,
             n = boxes.len(),
@@ -752,6 +910,7 @@ impl Runtime {
             .collect();
         let t = std::time::Instant::now();
         let mut recs = self.recognize_crops(&crops)?;
+        release_weights(OcrModel::Mobile);
         tracing::debug!(ms = t.elapsed().as_millis() as u64, "ocr: rec");
         let t = std::time::Instant::now();
         self.refine_cjk(&crops, &mut recs)?;
@@ -952,33 +1111,64 @@ fn scale_rect(r: &RotRect, sx: f64, sy: f64) -> RotRect {
     }
 }
 
-/// Detector input size: the image scaled so the longest side is at most
-/// `max_side`, both sides rounded to a multiple of 32.
-fn det_size(w: usize, h: usize, max_side: usize) -> (usize, usize) {
+/// Detector pixels per image pixel when the image is scaled so its longest
+/// side is at most `max_side`.
+fn det_scale(w: usize, h: usize, max_side: usize) -> f64 {
     let longest = w.max(h) as f64;
-    let scale = if longest > max_side as f64 {
+    if longest > max_side as f64 {
         max_side as f64 / longest
     } else {
         1.0
-    };
-    let r = |v: usize| (((v as f64 * scale) / 32.0).round() as usize).max(1) * 32;
-    (r(w), r(h))
+    }
 }
 
-/// Resize to `dw × dh` and normalise with the ImageNet statistics the
-/// detector was trained with (BGR channel order).
+/// Detector input size for an image region at `scale`, both sides rounded
+/// to a multiple of 32.
+fn det_dims(region: &PixRect, scale: f64) -> (usize, usize) {
+    let r = |v: usize| (((v as f64 * scale) / 32.0).round() as usize).max(1) * 32;
+    (r(region.width()), r(region.height()))
+}
+
+/// Detector input size for the whole image (see [`det_scale`]).
+fn det_size(w: usize, h: usize, max_side: usize) -> (usize, usize) {
+    det_dims(&PixRect::full(w, h), det_scale(w, h, max_side))
+}
+
+/// The part of a `w × h` page to run the detector on: the content's
+/// bounding box `ink` plus [`DET_CROP_MARGIN`] detector pixels of context,
+/// at the same scale as the full page (so text is just as large to the
+/// detector). Scans usually have wide blank margins, and the detector's
+/// time and activation memory grow with its input area. The whole page
+/// when there is no ink or the crop would save little.
+fn det_region(w: usize, h: usize, max_side: usize, ink: Option<PixRect>) -> PixRect {
+    let full = PixRect::full(w, h);
+    let Some(ink) = ink else {
+        return full;
+    };
+    let margin = (DET_CROP_MARGIN / det_scale(w, h, max_side)).ceil() as usize;
+    let r = ink.expand(margin, w, h);
+    let area = |r: &PixRect| (r.width() * r.height()) as f64;
+    if r.width() == 0 || r.height() == 0 || area(&r) > (1.0 - DET_CROP_MIN_SAVING) * area(&full) {
+        full
+    } else {
+        r
+    }
+}
+
+/// Resample `region` of the image to `dw × dh` and normalise with the
+/// ImageNet statistics the detector was trained with (BGR channel order).
 #[cfg_attr(not(spdf_neural_models), allow(dead_code))]
-fn det_input(img: &Rgb<'_>, dw: usize, dh: usize) -> Vec<f32> {
+fn det_input(img: &Rgb<'_>, region: &PixRect, dw: usize, dh: usize) -> Vec<f32> {
     const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
     const STD: [f32; 3] = [0.229, 0.224, 0.225];
-    let full = RotRect {
-        cx: img.w as f64 / 2.0,
-        cy: img.h as f64 / 2.0,
-        w: img.w as f64,
-        h: img.h as f64,
+    let area = RotRect {
+        cx: (region.x0 + region.x1) as f64 / 2.0,
+        cy: (region.y0 + region.y1) as f64 / 2.0,
+        w: region.width() as f64,
+        h: region.height() as f64,
         angle: 0.0,
     };
-    let mut rgb = geom::crop_rotrect(img, &full, dw, dh, false);
+    let mut rgb = geom::crop_rotrect(img, &area, dw, dh, false);
     let plane = dw * dh;
     // RGB planes → BGR planes.
     let (r, rest) = rgb.split_at_mut(plane);
@@ -1080,6 +1270,43 @@ mod tests {
         // The fast pass keeps the aspect ratio within rounding.
         let (w, h) = det_size(1275, 1651, DET_FAST_SIDE);
         assert_eq!((w, h), (992, 1280));
+    }
+
+    #[test]
+    fn detector_region_crops_margins_at_page_scale() {
+        // Letter page at 150 dpi; content in the middle with 1" margins.
+        let (w, h) = (1275, 1650);
+        let ink = PixRect {
+            x0: 150,
+            y0: 150,
+            x1: 1125,
+            y1: 1500,
+        };
+        let r = det_region(w, h, DET_FAST_SIDE, Some(ink));
+        // 32 detector px of context = 32 / (1280 / 1650) ≈ 42 image px.
+        assert_eq!((r.x0, r.y0, r.x1, r.y1), (108, 108, 1167, 1542));
+        // Same detector scale as the full page, so text keeps its size.
+        let (dw, dh) = det_dims(&r, det_scale(w, h, DET_FAST_SIDE));
+        let (fw, fh) = det_size(w, h, DET_FAST_SIDE);
+        assert!(dw < fw && dh < fh);
+        assert!((dh as f64 / r.height() as f64 - fh as f64 / h as f64).abs() < 0.03);
+        // Little to gain, blank page, degenerate ink: the whole page.
+        let wide = PixRect {
+            x0: 20,
+            y0: 20,
+            x1: 1255,
+            y1: 1630,
+        };
+        assert_eq!(
+            det_region(w, h, DET_FAST_SIDE, Some(wide)),
+            PixRect::full(w, h)
+        );
+        assert_eq!(det_region(w, h, DET_FAST_SIDE, None), PixRect::full(w, h));
+        // The whole page is exactly the old full-image input.
+        assert_eq!(
+            det_dims(&PixRect::full(w, h), det_scale(w, h, DET_MAX_SIDE)),
+            det_size(w, h, DET_MAX_SIDE)
+        );
     }
 
     fn line_box(w: f64, h: f64) -> DetBox {

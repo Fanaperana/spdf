@@ -24,6 +24,31 @@ pub struct PageData {
     pub rulings: Vec<Ruling>,
 }
 
+/// A rendered page as packed 8-bit RGB pixels, row-major, no padding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RgbPixels {
+    pub width: usize,
+    pub height: usize,
+    /// `width × height × 3` bytes.
+    pub data: Vec<u8>,
+}
+
+impl RgbPixels {
+    /// Drop the alpha channel of packed RGBA pixels.
+    pub fn from_rgba(width: usize, height: usize, rgba: &[u8]) -> Self {
+        let data = rgba
+            .chunks_exact(4)
+            .take(width * height)
+            .flat_map(|p| [p[0], p[1], p[2]])
+            .collect();
+        Self {
+            width,
+            height,
+            data,
+        }
+    }
+}
+
 /// An opaque handle to a loaded PDF document.
 pub trait PdfDocumentHandle: Send {
     fn num_pages(&self) -> u32;
@@ -64,6 +89,21 @@ pub trait PdfEngine: Send + Sync {
 
     /// Render a page to a PNG byte buffer at the given DPI.
     fn render_page_png(&self, doc: &Self::Doc, page_num: u32, dpi: u32) -> SpdfResult<Vec<u8>>;
+
+    /// Render a page to RGB pixels at the given DPI, for consumers that
+    /// work on pixels (OCR) and would otherwise decode the PNG again.
+    /// Default: decode [`PdfEngine::render_page_png`].
+    fn render_page_rgb(&self, doc: &Self::Doc, page_num: u32, dpi: u32) -> SpdfResult<RgbPixels> {
+        let png = self.render_page_png(doc, page_num, dpi)?;
+        let img = image::load_from_memory(&png)
+            .map_err(|e| spdf_types::SpdfError::Pdf(format!("decode rendered page: {e}")))?
+            .to_rgb8();
+        Ok(RgbPixels {
+            width: img.width() as usize,
+            height: img.height() as usize,
+            data: img.into_raw(),
+        })
+    }
 
     fn close(&self, doc: Self::Doc) -> SpdfResult<()> {
         drop(doc);
@@ -114,8 +154,29 @@ mod tests {
             })
         }
         fn render_page_png(&self, _: &Doc, _: u32, _: u32) -> SpdfResult<Vec<u8>> {
-            Ok(Vec::new())
+            // A 2×1 RGBA PNG: one red, one half-transparent blue pixel.
+            let img = image::RgbaImage::from_raw(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 128])
+                .expect("buffer size");
+            let mut buf = Vec::new();
+            img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+                .expect("encode");
+            Ok(buf)
         }
+    }
+
+    #[test]
+    fn default_rgb_render_decodes_the_png() {
+        let e = Counting::default();
+        let doc = e.load_bytes(&[], None).unwrap();
+        let px = e.render_page_rgb(&doc, 1, 72).unwrap();
+        assert_eq!((px.width, px.height), (2, 1));
+        assert_eq!(px.data, vec![255, 0, 0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn rgba_to_rgb_drops_alpha() {
+        let px = RgbPixels::from_rgba(2, 1, &[1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(px.data, vec![1, 2, 3, 5, 6, 7]);
     }
 
     #[test]

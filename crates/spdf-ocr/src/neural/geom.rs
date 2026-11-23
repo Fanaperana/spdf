@@ -300,6 +300,89 @@ impl Rgb<'_> {
     }
 }
 
+/// Axis-aligned pixel rectangle `[x0, x1) × [y0, y1)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PixRect {
+    pub x0: usize,
+    pub y0: usize,
+    pub x1: usize,
+    pub y1: usize,
+}
+
+impl PixRect {
+    pub fn full(w: usize, h: usize) -> Self {
+        Self {
+            x0: 0,
+            y0: 0,
+            x1: w,
+            y1: h,
+        }
+    }
+
+    pub fn width(&self) -> usize {
+        self.x1 - self.x0
+    }
+
+    pub fn height(&self) -> usize {
+        self.y1 - self.y0
+    }
+
+    /// Grown by `m` pixels on every side, clipped to a `w × h` image.
+    pub fn expand(&self, m: usize, w: usize, h: usize) -> Self {
+        Self {
+            x0: self.x0.saturating_sub(m),
+            y0: self.y0.saturating_sub(m),
+            x1: (self.x1 + m).min(w),
+            y1: (self.y1 + m).min(h),
+        }
+    }
+}
+
+/// Luminance difference from the page background that counts as ink.
+pub const INK_DELTA: i32 = 40;
+
+/// Bounding box of the page content: pixels whose luminance differs from
+/// the background (the most common luminance) by more than [`INK_DELTA`]
+/// and that touch another such pixel (a lone speck is not content).
+/// `None` when nothing qualifies.
+pub fn ink_bounds(img: &Rgb<'_>) -> Option<PixRect> {
+    let (w, h) = (img.w, img.h);
+    let luma = |p: &[u8]| (77 * p[0] as i32 + 150 * p[1] as i32 + 29 * p[2] as i32) >> 8;
+    let px = img.data.chunks_exact(3).take(w * h);
+    let mut hist = [0u32; 256];
+    for p in px.clone() {
+        hist[luma(p) as usize] += 1;
+    }
+    let bg = (0..256).max_by_key(|&i| hist[i])? as i32;
+    let ink: Vec<bool> = px.map(|p| (luma(p) - bg).abs() > INK_DELTA).collect();
+    let mut r: Option<PixRect> = None;
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            if !ink[i] {
+                continue;
+            }
+            let touches = (x > 0 && ink[i - 1])
+                || (x + 1 < w && ink[i + 1])
+                || (y > 0 && ink[i - w])
+                || (y + 1 < h && ink[i + w]);
+            if !touches {
+                continue;
+            }
+            let b = r.get_or_insert(PixRect {
+                x0: x,
+                y0: y,
+                x1: x + 1,
+                y1: y + 1,
+            });
+            b.x0 = b.x0.min(x);
+            b.x1 = b.x1.max(x + 1);
+            b.y1 = y + 1;
+        }
+    }
+    r
+}
+
 /// Sample the rectangle `r` (reading axis horizontal) into an
 /// `out_w × out_h` RGB f32 buffer with values in 0..=255, planar CHW.
 /// `flip` rotates the crop by 180° (for upside-down text).
@@ -340,6 +423,76 @@ mod tests {
 
     fn approx(a: f64, b: f64, eps: f64) -> bool {
         (a - b).abs() <= eps
+    }
+
+    /// `w × h` RGB image of colour `bg` with `ink` pixels set to `fg`.
+    fn page(w: usize, h: usize, bg: u8, fg: u8, ink: &[(usize, usize)]) -> Vec<u8> {
+        let mut d = vec![bg; w * h * 3];
+        for &(x, y) in ink {
+            d[(y * w + x) * 3..(y * w + x) * 3 + 3].fill(fg);
+        }
+        d
+    }
+
+    #[test]
+    fn ink_bounds_finds_content_and_ignores_specks() {
+        // Two short strokes of text, plus a lone speck near the corner.
+        let mut ink: Vec<(usize, usize)> = (20..40).flat_map(|x| [(x, 30), (x, 31)]).collect();
+        ink.extend((25..60).map(|x| (x, 70)));
+        ink.push((95, 5));
+        let d = page(100, 100, 250, 20, &ink);
+        let r = ink_bounds(&Rgb {
+            data: &d,
+            w: 100,
+            h: 100,
+        })
+        .unwrap();
+        assert_eq!(
+            r,
+            PixRect {
+                x0: 20,
+                y0: 30,
+                x1: 60,
+                y1: 71
+            }
+        );
+        // Light text on a dark page works the same way.
+        let d = page(100, 100, 10, 230, &ink);
+        let dark = Rgb {
+            data: &d,
+            w: 100,
+            h: 100,
+        };
+        assert_eq!(ink_bounds(&dark), Some(r));
+        // Faint texture below the ink threshold is background.
+        let d = page(100, 100, 250, 230, &ink);
+        let faint = Rgb {
+            data: &d,
+            w: 100,
+            h: 100,
+        };
+        assert_eq!(ink_bounds(&faint), None);
+    }
+
+    #[test]
+    fn pixrect_expand_clips_to_image() {
+        let r = PixRect {
+            x0: 5,
+            y0: 40,
+            x1: 60,
+            y1: 90,
+        };
+        assert_eq!(
+            r.expand(10, 100, 95),
+            PixRect {
+                x0: 0,
+                y0: 30,
+                x1: 70,
+                y1: 95
+            }
+        );
+        assert_eq!(PixRect::full(7, 9).width(), 7);
+        assert_eq!(PixRect::full(7, 9).height(), 9);
     }
 
     #[test]

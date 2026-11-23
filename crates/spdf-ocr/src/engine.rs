@@ -45,6 +45,29 @@ pub trait OcrEngine: Send + Sync {
     /// Run OCR on an image (PNG/JPEG bytes).
     fn recognize(&self, image: &[u8], options: &OcrOptions) -> SpdfResult<Vec<OcrResult>>;
 
+    /// Whether [`OcrEngine::recognize_rgb`] is implemented, so callers can
+    /// hand over decoded pixels instead of an encoded image.
+    fn accepts_rgb(&self) -> bool {
+        false
+    }
+
+    /// Run OCR on packed 8-bit RGB pixels (`width × height × 3` bytes),
+    /// skipping an encode/decode round trip. Only called when
+    /// [`OcrEngine::accepts_rgb`] is true; the default reports it as
+    /// unsupported.
+    fn recognize_rgb(
+        &self,
+        _rgb: &[u8],
+        _width: usize,
+        _height: usize,
+        _options: &OcrOptions,
+    ) -> SpdfResult<Vec<OcrResult>> {
+        Err(spdf_types::SpdfError::Ocr(format!(
+            "{} OCR does not take raw pixels",
+            self.name()
+        )))
+    }
+
     /// Default batch impl delegates to `recognize` sequentially. Engines with
     /// real batch APIs (e.g. a remote server that accepts a JSON array) should
     /// override for a meaningful throughput win.

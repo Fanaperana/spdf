@@ -316,14 +316,24 @@ impl SpdfParser {
         let results: Vec<(usize, Vec<OcrResult>)> = pool.install(|| {
             todo.par_iter()
                 .map(|&(idx, page_num)| {
-                    let image = match engine.render_page_png(doc, page_num, dpi) {
-                        Ok(b) => b,
+                    // Engines that work on pixels skip the PNG round trip.
+                    let recognized = if ocr.accepts_rgb() {
+                        engine
+                            .render_page_rgb(doc, page_num, dpi)
+                            .map(|px| ocr.recognize_rgb(&px.data, px.width, px.height, &options))
+                    } else {
+                        engine
+                            .render_page_png(doc, page_num, dpi)
+                            .map(|png| ocr.recognize(&png, &options))
+                    };
+                    let recognized = match recognized {
+                        Ok(r) => r,
                         Err(e) => {
                             warn!(page = page_num, error = %e, "spdf: render for OCR failed");
                             return (idx, Vec::new());
                         }
                     };
-                    match ocr.recognize(&image, &options) {
+                    match recognized {
                         Ok(r) => (idx, r),
                         Err(e) => {
                             warn!(page = page_num, error = %e, "spdf: OCR failed");

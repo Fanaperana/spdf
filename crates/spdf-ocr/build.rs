@@ -20,10 +20,12 @@
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/neural/fold.rs");
+    println!("cargo:rerun-if-changed=src/neural/head.rs");
     println!("cargo:rerun-if-env-changed=SPDF_OCR_MODEL_DIR");
     println!("cargo:rerun-if-env-changed=SPDF_OCR_SKIP_MODELS");
     println!("cargo::rustc-check-cfg=cfg(spdf_neural_models)");
     println!("cargo::rustc-check-cfg=cfg(spdf_rec_logits)");
+    println!("cargo::rustc-check-cfg=cfg(spdf_rec_head)");
     #[cfg(feature = "neural")]
     neural::run();
 }
@@ -31,6 +33,10 @@ fn main() {
 #[cfg(feature = "neural")]
 #[path = "src/neural/fold.rs"]
 mod fold;
+
+#[cfg(feature = "neural")]
+#[path = "src/neural/head.rs"]
+mod head;
 
 #[cfg(feature = "neural")]
 mod neural {
@@ -93,30 +99,40 @@ mod neural {
                 // its weights before code generation (see `fold.rs`).
                 let opt_dir = out_dir.join("onnx-opt");
                 fs::create_dir_all(&opt_dir).expect("create onnx-opt dir");
+                let model_dir = out_dir.join("model");
+                fs::create_dir_all(&model_dir).expect("create model dir");
                 // Recognisers also lose their output softmax (see
-                // `strip_output_softmax`); the runtime decodes logits only
-                // when all three were stripped.
-                let mut logits = 0;
-                let mut opt = |i: usize, strip_softmax: bool| {
+                // `strip_output_softmax`) and, when all three allow it, their
+                // output classifier, which the runtime then applies itself
+                // (`split_output_linear`, `head.rs`). Both are all-or-nothing
+                // across the three, which share the runtime decoding path.
+                let opt = |i: usize, rec: bool, split: bool| -> (PathBuf, usize, bool) {
                     let dst = opt_dir.join(MODELS[i].0);
-                    match optimize_onnx(&dir.join(MODELS[i].0), &dst, strip_softmax) {
-                        Ok(stripped) => {
-                            logits += usize::from(stripped == 1);
-                            dst
-                        }
+                    let head = split.then(|| model_dir.join(MODELS[i].0.replace(".onnx", ".head")));
+                    match optimize_onnx(&dir.join(MODELS[i].0), &dst, rec, head.as_deref()) {
+                        Ok((stripped, split)) => (dst, stripped, split),
                         Err(e) => {
                             println!(
                                 "cargo:warning=spdf-ocr: {}: graph folding skipped: {e}",
                                 MODELS[i].0
                             );
-                            dir.join(MODELS[i].0)
+                            (dir.join(MODELS[i].0), 0, false)
                         }
                     }
                 };
-                let det = opt(0, false);
-                let rec = opt(1, true);
-                let rec_server = opt(3, true);
-                let rec_latin = opt(4, true);
+                let det = opt(0, false, false).0;
+                let mut recs: Vec<(PathBuf, usize, bool)> =
+                    [1, 3, 4].iter().map(|&i| opt(i, true, true)).collect();
+                let heads = recs.iter().filter(|r| r.2).count();
+                if heads == 3 {
+                    println!("cargo:rustc-cfg=spdf_rec_head");
+                } else {
+                    if heads > 0 {
+                        recs = [1, 3, 4].iter().map(|&i| opt(i, true, false)).collect();
+                    }
+                    println!("cargo:warning=spdf-ocr: recogniser heads kept ({heads}/3 split)");
+                }
+                let logits = recs.iter().filter(|r| r.1 == 1).count();
                 if logits == 3 {
                     println!("cargo:rustc-cfg=spdf_rec_logits");
                 } else {
@@ -124,6 +140,7 @@ mod neural {
                         "cargo:warning=spdf-ocr: recogniser softmax kept ({logits}/3 stripped)"
                     );
                 }
+                let [rec, rec_server, rec_latin] = [0, 1, 2].map(|i| recs[i].0.clone());
                 burn_onnx::ModelGen::new()
                     .input(det.to_str().expect("utf-8 model path"))
                     .input(rec.to_str().expect("utf-8 model path"))
@@ -144,10 +161,17 @@ mod neural {
         }
     }
 
-    /// Rewrite `src` with [`crate::fold`] applied and write it to `dst`.
-    /// Fold a model's graph into `dst`; with `strip_softmax`, also drop its
-    /// output softmax. Returns the number of softmax nodes stripped.
-    fn optimize_onnx(src: &Path, dst: &Path, strip_softmax: bool) -> Result<usize, String> {
+    /// Fold a model's graph (see `fold.rs`) into `dst`; with
+    /// `strip_softmax`, also drop its output softmax, and with `head`, also
+    /// detach its output classifier into that file (see `head.rs`). Returns
+    /// the number of softmax nodes stripped and whether the classifier was
+    /// detached.
+    fn optimize_onnx(
+        src: &Path,
+        dst: &Path,
+        strip_softmax: bool,
+        head: Option<&Path>,
+    ) -> Result<(usize, bool), String> {
         use crate::fold;
         use onnx_ir::{Message, ModelProto};
         use std::collections::HashSet;
@@ -220,6 +244,29 @@ mod neural {
             g.strip_output_softmax()
         } else {
             0
+        };
+        let split = match head {
+            Some(path) if stripped == 1 => match g.split_output_linear() {
+                Some(h) => {
+                    fs::write(path, crate::head::pack(h.k, h.n, &h.w, &h.b))
+                        .map_err(|e| format!("write {}: {e}", path.display()))?;
+                    // The graph now returns the classifier's input features.
+                    for v in &mut graph.output {
+                        let shape = v
+                            .type_
+                            .mut_or_insert_default()
+                            .mut_tensor_type()
+                            .shape
+                            .mut_or_insert_default();
+                        if let Some(d) = shape.dim.last_mut() {
+                            d.set_dim_value(h.k as i64);
+                        }
+                    }
+                    true
+                }
+                None => false,
+            },
+            _ => false,
         };
 
         let protos = std::mem::take(&mut graph.node);
@@ -304,14 +351,14 @@ mod neural {
         fs::write(dst, out).map_err(|e| format!("write {}: {e}", dst.display()))?;
         // Build-script stdout is kept in the build log (`cargo -vv`).
         println!(
-            "spdf-ocr: {}: folded {} identity, {} post-conv, {} pre-conv ops; split {} convs; stripped {stripped} softmax",
+            "spdf-ocr: {}: folded {} identity, {} post-conv, {} pre-conv ops; split {} convs; stripped {stripped} softmax; head split: {split}",
             src.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
             stats.identity,
             stats.after_conv,
             stats.before_conv,
             stats.split_conv
         );
-        Ok(stripped)
+        Ok((stripped, split))
     }
 
     fn cache_dir() -> PathBuf {

@@ -78,6 +78,16 @@ pub struct Graph {
     pub output_ranks: HashMap<String, usize>,
 }
 
+/// A dense layer detached from a graph output by
+/// [`Graph::split_output_linear`]: `y = x · w + b`, `w` row-major `[k, n]`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinearHead {
+    pub k: usize,
+    pub n: usize,
+    pub w: Vec<f32>,
+    pub b: Vec<f32>,
+}
+
 /// Fold counts, for the build log.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct FoldStats {
@@ -526,6 +536,68 @@ impl Graph {
         stripped
     }
 
+    /// Detach a graph output's final dense layer, `out = x · W + b` (a
+    /// `MatMul` by a constant `[K, N]` matrix then an `Add` of a constant
+    /// `[N]` bias), so the graph returns `x` (the `K`-wide features) under
+    /// the old output name and the caller applies the layer itself. A CTC
+    /// recogniser's classifier maps 120 features to ~18k classes per step:
+    /// materialising those logits is the bulk of the recogniser's memory,
+    /// while greedy decoding only needs each step's arg-max and softmax
+    /// mass, which the caller can stream. Only applies when the graph has
+    /// exactly one output and the layer's intermediates have no other use.
+    pub fn split_output_linear(&mut self) -> Option<LinearHead> {
+        if self.outputs.len() != 1 {
+            return None;
+        }
+        let out = self.outputs.iter().next()?.clone();
+        let add = self.producer(&out)?;
+        let a = &self.nodes[add];
+        if a.op != "Add" || a.inputs.len() != 2 {
+            return None;
+        }
+        let (m, bias) = match (self.consts.get(&a.inputs[0]), self.consts.get(&a.inputs[1])) {
+            (None, Some(b)) => (a.inputs[0].clone(), b.clone()),
+            (Some(b), None) => (a.inputs[1].clone(), b.clone()),
+            _ => return None,
+        };
+        let mm = self.producer(&m)?;
+        if self.sole_consumer(&m) != Some(add) {
+            return None;
+        }
+        let mmn = &self.nodes[mm];
+        if mmn.op != "MatMul" || mmn.inputs.len() != 2 {
+            return None;
+        }
+        let x = mmn.inputs[0].clone();
+        let w = self.consts.get(&mmn.inputs[1])?.clone();
+        let [k, n] = w.dims[..] else {
+            return None;
+        };
+        let (k, n) = (k as usize, n as usize);
+        if bias.data.len() != n || bias.dims.iter().product::<i64>() as usize != n {
+            return None;
+        }
+        // `x` must be computed by the graph (not a constant or the graph
+        // input) and feed nothing but this layer.
+        let xp = self.producer(&x)?;
+        if self.sole_consumer(&x) != Some(mm) {
+            return None;
+        }
+        self.nodes[add].removed = true;
+        self.nodes[mm].removed = true;
+        for o in &mut self.nodes[xp].outputs {
+            if *o == x {
+                *o = out.clone();
+            }
+        }
+        Some(LinearHead {
+            k,
+            n,
+            w: w.data,
+            b: bias.data,
+        })
+    }
+
     /// Names of constants still referenced by a live node.
     pub fn live_consts(&self) -> HashSet<String> {
         self.nodes
@@ -736,6 +808,72 @@ mod tests {
             // The logits now leave the graph under the old output name.
             assert_eq!(live[0].outputs, ["probs"]);
         }
+    }
+
+    /// `x → Transpose → MatMul(w) → Add(b)` with `y` as the graph output.
+    fn linear_head(bias_first: bool) -> Graph {
+        let mut g = Graph::default();
+        g.consts
+            .insert("w".into(), k(&[2, 3], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+        g.consts.insert("b".into(), k(&[3], &[0.1, 0.2, 0.3]));
+        let add = if bias_first {
+            Node::new("Add", &["b", "mm"], &["y"])
+        } else {
+            Node::new("Add", &["mm", "b"], &["y"])
+        };
+        g.nodes = vec![
+            Node::new("Transpose", &["x"], &["feat"]),
+            Node::new("MatMul", &["feat", "w"], &["mm"]),
+            add,
+        ];
+        g.outputs.insert("y".into());
+        g
+    }
+
+    #[test]
+    fn splits_output_linear_layer() {
+        for bias_first in [false, true] {
+            let mut g = linear_head(bias_first);
+            let head = g.split_output_linear().expect("split");
+            assert_eq!((head.k, head.n), (2, 3));
+            assert_eq!(head.w, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+            assert_eq!(head.b, vec![0.1, 0.2, 0.3]);
+            let live: Vec<&Node> = g.nodes.iter().filter(|n| !n.removed).collect();
+            assert_eq!(live.len(), 1);
+            // The features now leave the graph under the old output name.
+            assert_eq!(live[0].op, "Transpose");
+            assert_eq!(live[0].outputs, ["y"]);
+            assert!(!g.live_consts().contains("w"));
+        }
+    }
+
+    #[test]
+    fn keeps_linear_layer_that_cannot_be_detached() {
+        // Matrix product feeds something else too.
+        let mut g = linear_head(false);
+        g.nodes.push(Node::new("Relu", &["mm"], &["z"]));
+        assert!(g.split_output_linear().is_none());
+        // Features used elsewhere.
+        let mut g = linear_head(false);
+        g.nodes.push(Node::new("Relu", &["feat"], &["z"]));
+        assert!(g.split_output_linear().is_none());
+        // Weight is not a constant.
+        let mut g = linear_head(false);
+        g.consts.remove("w");
+        assert!(g.split_output_linear().is_none());
+        // Bias length does not match the weight's columns.
+        let mut g = linear_head(false);
+        g.consts.insert("b".into(), k(&[2], &[0.1, 0.2]));
+        assert!(g.split_output_linear().is_none());
+        // Two graph outputs: ambiguous.
+        let mut g = linear_head(false);
+        g.outputs.insert("feat".into());
+        assert!(g.split_output_linear().is_none());
+        // The input feeds the product directly: nothing would be left.
+        let mut g = linear_head(false);
+        g.nodes.remove(0);
+        g.nodes[0].inputs[0] = "x".into();
+        assert!(g.split_output_linear().is_none());
     }
 
     #[test]
