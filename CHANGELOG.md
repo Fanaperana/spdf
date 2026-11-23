@@ -6,6 +6,14 @@ All notable changes to `spdf` land here. We follow
 
 ## [Unreleased]
 
+### Changed
+- MSRV raised to 1.95 (`rust-version` in `Cargo.toml`): the locked
+  dependency graph (burn 0.22, sysinfo 0.39, windows 0.100, ...) needs it.
+  The CI `msrv` job now really runs that toolchain (`RUSTUP_TOOLCHAIN`
+  overrides `rust-toolchain.toml`, which had silently turned it into a
+  stable check) and uses `--locked`.
+- Docs: the `edge` benchmark suite has 46 cases, not 48.
+
 ## [0.2.0-alpha.2] — 2026-04-19
 
 ### Added

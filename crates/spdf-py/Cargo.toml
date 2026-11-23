@@ -2,7 +2,7 @@
 name = "spdf-py"
 version = "0.2.0-alpha.2"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.95"
 license = "MIT"
 repository = "https://github.com/Fanaperana/spdf"
 authors = ["spdf contributors"]

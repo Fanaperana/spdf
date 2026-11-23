@@ -20,7 +20,7 @@ self-contained binary.
 
 [![CI](https://github.com/Fanaperana/spdf/actions/workflows/ci.yml/badge.svg)](https://github.com/Fanaperana/spdf/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](rust-toolchain.toml)
+[![Rust](https://img.shields.io/badge/rust-1.95%2B-orange.svg)](rust-toolchain.toml)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#install)
 
 </div>
@@ -29,7 +29,7 @@ self-contained binary.
 
 ## Get started in 10 minutes
 
-Assumes Rust 1.85+ is already installed ([rustup.rs](https://rustup.rs);
+Assumes Rust 1.95+ is already installed ([rustup.rs](https://rustup.rs);
 installing Rust itself is extra). On a machine with a warm cargo cache the
 install below took 7 m 21 s; a cold crate cache or the first OCR model
 download (~110 MB) can take longer.
@@ -112,7 +112,7 @@ Full scoreboard, including every per-case row: [bench/RESULTS.md](bench/RESULTS.
 **125 wins · 36 ties · 1 loss** across all tracked metrics. Because of that
 one loss, spdf does **not** yet beat LiteParse on every metric.
 
-`odl` = 200 real PDFs from opendataloader-bench (no OCR). `edge` = 48
+`odl` = 200 real PDFs from opendataloader-bench (no OCR). `edge` = 46
 generated edge cases (default OCR on). Higher is better for accuracy; lower
 is better for time and memory.
 
@@ -135,7 +135,7 @@ is better for time and memory.
 | odl s/doc, mean | **0.0426** | 0.0943 | win |
 | odl s/doc, median | **0.0419** | 0.0945 | win |
 | odl s/doc, p95 | **0.0473** | 0.1107 | win |
-| edge total (48 cases) | **4.6501** | 9.6424 | win |
+| edge total (46 cases) | **4.6501** | 9.6424 | win |
 | edge OCR s/doc, mean | **0.3668** | 0.4744 | win |
 | edge OCR s/doc, max | **0.6079** | 0.9237 | win |
 | edge 400-page doc | **0.1679** | 0.3328 | win |
@@ -169,7 +169,7 @@ memory.
 - **Suites:** [opendataloader-bench](https://github.com/opendataloader-project/opendataloader-bench)
   at commit `7af1d8f` (200 PDFs with markdown ground truth, scored with
   the harness's own scorer: NID, TEDS, MHS, overall = mean of the three),
-  plus 48 generated edge cases from
+  plus 46 generated edge cases from
   [bench/edge/make_corpus.py](bench/edge/make_corpus.py) (multi-column,
   tables, rotation, CJK / RTL, encryption, broken xrefs, image-only scans,
   a 400-page doc, garbage inputs, …), scored by NID and token F1 against
@@ -268,10 +268,10 @@ for per-release detail.
 | --- | --- |
 | JSON output schema (byte-compatible with LiteParse) | stable (covered by parity harness) |
 | Typed error enum at the public API (`SpdfError`) | stable |
-| Benchmark corpus | [bench/](bench/): opendataloader-bench (200 PDFs) + 48 generated edge cases; public-domain fixtures in [example/](example/) |
+| Benchmark corpus | [bench/](bench/): opendataloader-bench (200 PDFs) + 46 generated edge cases; public-domain fixtures in [example/](example/) |
 | Property tests (`cargo test -p spdf-projection proptests`) | panic-freedom + shuffle-stability |
 | Fuzz harness (`cargo +nightly fuzz run parse_pdf`) | [fuzz/](fuzz/) — run before exposing to untrusted input |
-| Cross-platform CI | Linux + macOS + Windows; MSRV 1.85; rustdoc warnings gated |
+| Cross-platform CI | Linux + macOS + Windows; MSRV 1.95 (checked in CI with `--locked`); rustdoc warnings gated |
 | Resource guards (`timeout_secs`, `max_input_bytes`, `max_pages`) | available via [`SpdfParser::builder`](crates/spdf-core/src/lib.rs) |
 | Security policy | see [SECURITY.md](SECURITY.md) |
 | CLI / Rust library API | best-effort stable, breaks noted in [CHANGELOG.md](CHANGELOG.md) |
@@ -297,7 +297,7 @@ full hardening checklist in [SECURITY.md](SECURITY.md).
 ### From GitHub (recommended)
 
 ```sh
-# Requires Rust 1.85+ (https://rustup.rs). Then:
+# Requires Rust 1.95+ (https://rustup.rs). Then:
 cargo install --git https://github.com/Fanaperana/spdf --locked spdf-cli
 ```
 

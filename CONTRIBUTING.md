@@ -14,7 +14,7 @@ cargo test  --workspace
 
 You'll need:
 
-- Rust **1.85+** (see [rust-toolchain.toml](rust-toolchain.toml))
+- Rust **1.95+** (the `rust-version` in [Cargo.toml](Cargo.toml); day-to-day builds use stable via [rust-toolchain.toml](rust-toolchain.toml))
 - A PDFium shared library available at runtime (see [README](README.md#install))
 - Optional: Tesseract for the OCR tests, LibreOffice for the conversion tests
 

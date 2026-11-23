@@ -77,11 +77,16 @@ jobs:
   msrv:
     name: minimum supported Rust version
     runs-on: ubuntu-latest
+    env:
+      # rust-toolchain.toml pins `stable`, which would otherwise override the
+      # toolchain installed below and turn this into a second stable check.
+      RUSTUP_TOOLCHAIN: "1.95.0"
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85
+      - uses: dtolnay/rust-toolchain@1.95.0
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace --exclude xtask --exclude spdf-ffi
+      - run: rustc --version
+      - run: cargo check --locked --workspace --exclude xtask --exclude spdf-ffi
 
   docs:
     name: rustdoc
