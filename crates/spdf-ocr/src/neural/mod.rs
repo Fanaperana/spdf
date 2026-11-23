@@ -113,9 +113,16 @@ macro_rules! staged_rec {
 #[cfg(spdf_neural_models)]
 staged_rec!(rec_model, rec_server_model, rec_latin_model);
 
-/// Upper bound on CPU inference threads by default; beyond this the
-/// small OCR tensors stop scaling.
-const MAX_CPU_THREADS: usize = 16;
+/// Upper bound on CPU inference threads by default.
+///
+/// A page's work is a handful of line batches of small tensors, which stop
+/// scaling well before 8 workers, while every extra worker carries its own
+/// scratch (im2col tiles, GEMM packing, allocator caches) that is resident
+/// at each stage's peak. Measured on a 24-thread CPU (8 performance cores):
+/// 8 workers instead of 16 keep the scanned-page latency within ~3%
+/// (median of 7) and cut peak RSS by 3-11 MB, most on the CJK server
+/// recogniser and skewed pages; 6 workers start costing 5-15% time.
+const MAX_CPU_THREADS: usize = 8;
 /// Recogniser input height for PP-OCRv5.
 const REC_H: usize = 48;
 /// Recogniser width downsampling (input pixels per CTC timestep).
@@ -1490,16 +1497,18 @@ fn crop_line(img: &Rgb<'_>, r: &RotRect, flip: bool) -> Crop {
 /// Threads for CPU inference: `SPDF_OCR_THREADS` if set, else every
 /// available core up to [`MAX_CPU_THREADS`].
 fn cpu_threads() -> usize {
-    std::env::var("SPDF_OCR_THREADS")
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
+    thread_count(
+        std::env::var("SPDF_OCR_THREADS").ok().as_deref(),
+        std::thread::available_parallelism().map_or(4, |n| n.get()),
+    )
+}
+
+/// [`cpu_threads`] for an `SPDF_OCR_THREADS` value and `available` cores:
+/// a positive override is taken as is (even above the default cap).
+fn thread_count(var: Option<&str>, available: usize) -> usize {
+    var.and_then(|v| v.trim().parse::<usize>().ok())
         .filter(|&n| n > 0)
-        .unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4)
-                .min(MAX_CPU_THREADS)
-        })
+        .unwrap_or_else(|| available.clamp(1, MAX_CPU_THREADS))
 }
 
 fn cpu_pool() -> Option<rayon::ThreadPool> {
@@ -1783,6 +1792,18 @@ mod tests {
         assert!(!mostly_cjk(&decoded("Total revenue 中 was up")));
         assert!(!mostly_cjk(&decoded("")));
         assert!(!mostly_cjk(&decoded("   ")));
+    }
+
+    #[test]
+    fn cpu_threads_cap_the_default_but_not_an_override() {
+        assert_eq!(thread_count(None, 24), MAX_CPU_THREADS);
+        assert_eq!(thread_count(None, 4), 4);
+        assert_eq!(thread_count(None, 0), 1);
+        assert_eq!(thread_count(Some(" 16 "), 24), 16);
+        assert_eq!(thread_count(Some("2"), 24), 2);
+        for bad in ["0", "", "many"] {
+            assert_eq!(thread_count(Some(bad), 6), 6, "{bad:?}");
+        }
     }
 
     #[test]
