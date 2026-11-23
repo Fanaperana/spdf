@@ -869,11 +869,12 @@ fn render_row_grid(
                     .chain(measured)
                     .any(|g| pr <= g && it.x >= g);
             if gap_pts > column_gap || across_gutter {
-                if let Some((g, end)) = measure.as_mut() {
-                    if pr <= *g && it.x >= *g {
-                        let trailing = out.chars().rev().take_while(|&c| c == ' ').count();
-                        **end = cur_cols - trailing;
-                    }
+                if let Some((g, end)) = measure.as_mut()
+                    && pr <= *g
+                    && it.x >= *g
+                {
+                    let trailing = out.chars().rev().take_while(|&c| c == ' ').count();
+                    **end = cur_cols - trailing;
                 }
                 // Wide gap: pad to the item's (gutter-aligned) column.
                 let col = target_col(it.x, char_unit, page_left, shifts);

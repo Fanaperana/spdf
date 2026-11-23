@@ -253,7 +253,9 @@ mod neural {
             }
             let data: Vec<f32> = if !t.raw_data.is_empty() {
                 t.raw_data
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
                     .collect()
             } else {

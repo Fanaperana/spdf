@@ -352,7 +352,7 @@ pub fn ink_bounds(img: &Rgb<'_>) -> InkScan {
     const SEEN: u8 = 2;
     let (w, h) = (img.w, img.h);
     let luma = |p: &[u8]| (77 * p[0] as i32 + 150 * p[1] as i32 + 29 * p[2] as i32) >> 8;
-    let px = img.data.chunks_exact(3).take(w * h);
+    let px = img.data.as_chunks::<3>().0.iter().take(w * h);
     let mut hist = [0u32; 256];
     for p in px.clone() {
         hist[luma(p) as usize] += 1;

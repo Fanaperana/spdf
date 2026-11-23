@@ -155,7 +155,9 @@ fn floats(b: &[u8]) -> Cow<'_, [f32]> {
         Cow::Borrowed(unsafe { std::slice::from_raw_parts(b.as_ptr().cast::<f32>(), b.len() / 4) })
     } else {
         Cow::Owned(
-            b.chunks_exact(4)
+            b.as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect(),
         )

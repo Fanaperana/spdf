@@ -37,7 +37,9 @@ impl RgbPixels {
     /// Drop the alpha channel of packed RGBA pixels.
     pub fn from_rgba(width: usize, height: usize, rgba: &[u8]) -> Self {
         let data = rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .take(width * height)
             .flat_map(|p| [p[0], p[1], p[2]])
             .collect();

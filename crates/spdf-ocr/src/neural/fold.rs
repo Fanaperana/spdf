@@ -245,10 +245,10 @@ impl Graph {
                     },
                 );
                 let mut inputs: Vec<&str> = vec![x, &wn];
-                if p == 0 {
-                    if let Some(b) = conv.inputs.get(2).filter(|b| !b.is_empty()) {
-                        inputs.push(b);
-                    }
+                if p == 0
+                    && let Some(b) = conv.inputs.get(2).filter(|b| !b.is_empty())
+                {
+                    inputs.push(b);
                 }
                 let last = p + 1 == cat.inputs.len();
                 let y = if last && acc.is_none() {
@@ -414,10 +414,10 @@ impl Graph {
                 },
             );
             let mut inputs: Vec<&str> = vec![&xs, &wn];
-            if p == 0 {
-                if let Some(b) = conv.inputs.get(2).filter(|b| !b.is_empty()) {
-                    inputs.push(b);
-                }
+            if p == 0
+                && let Some(b) = conv.inputs.get(2).filter(|b| !b.is_empty())
+            {
+                inputs.push(b);
             }
             let y = format!("{tag}_y");
             let mut piece = Node::new("Conv", &inputs, &[&y]);

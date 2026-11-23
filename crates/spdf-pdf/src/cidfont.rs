@@ -149,7 +149,7 @@ fn type0_map(objs: &Objects, dict: &[(String, Obj)]) -> Option<CidMap> {
             }
         }
         Some(table) => {
-            for (cid, pair) in table.chunks_exact(2).enumerate() {
+            for (cid, pair) in table.as_chunks::<2>().0.iter().enumerate() {
                 let gid = u16::from_be_bytes([pair[0], pair[1]]);
                 if gid == 0 {
                     continue;
@@ -360,10 +360,10 @@ fn decode_stream(objs: &Objects, d: &[(String, Obj)], raw: &[u8]) -> Option<Vec<
         _ => return None,
     };
     // Predictors are not supported (rare on font programs / object streams).
-    if let Some(Obj::Dict(p)) = dict_get(d, "DecodeParms").map(|p| objs.resolve(p)) {
-        if matches!(dict_get(p, "Predictor"), Some(Obj::Num(v)) if *v > 1.0) {
-            return None;
-        }
+    if let Some(Obj::Dict(p)) = dict_get(d, "DecodeParms").map(|p| objs.resolve(p))
+        && matches!(dict_get(p, "Predictor"), Some(Obj::Num(v)) if *v > 1.0)
+    {
+        return None;
     }
     let mut data = raw.to_vec();
     for f in filters {
@@ -656,14 +656,14 @@ fn decode_name(raw: &[u8]) -> String {
     let mut out = Vec::with_capacity(raw.len());
     let mut i = 0;
     while i < raw.len() {
-        if raw[i] == b'#' && i + 2 < raw.len() {
-            if let Ok(v) =
+        if raw[i] == b'#'
+            && i + 2 < raw.len()
+            && let Ok(v) =
                 u8::from_str_radix(std::str::from_utf8(&raw[i + 1..i + 3]).unwrap_or("zz"), 16)
-            {
-                out.push(v);
-                i += 3;
-                continue;
-            }
+        {
+            out.push(v);
+            i += 3;
+            continue;
         }
         out.push(raw[i]);
         i += 1;

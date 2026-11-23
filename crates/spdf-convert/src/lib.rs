@@ -115,10 +115,10 @@ pub fn convert_path_to_pdf(path: &Path, password: Option<&str>) -> SpdfResult<Co
 }
 
 fn guess_extension(path: &Path) -> Option<String> {
-    if let Some(e) = path.extension().and_then(|s| s.to_str()) {
-        if !e.is_empty() {
-            return Some(e.to_string());
-        }
+    if let Some(e) = path.extension().and_then(|s| s.to_str())
+        && !e.is_empty()
+    {
+        return Some(e.to_string());
     }
     let mut f = std::fs::File::open(path).ok()?;
     use std::io::Read;

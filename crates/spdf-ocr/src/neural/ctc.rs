@@ -49,14 +49,15 @@ pub fn greedy_decode(classes: &[usize], probs: &[f32], cs: &Charset) -> Vec<Deco
     let mut out = Vec::new();
     let mut prev = usize::MAX;
     for (t, (&c, &p)) in classes.iter().zip(probs).enumerate() {
-        if c != prev && c != 0 {
-            if let Some(s) = cs.get(c) {
-                out.push(DecodedChar {
-                    text: s.to_string(),
-                    step: t,
-                    prob: p,
-                });
-            }
+        if c != prev
+            && c != 0
+            && let Some(s) = cs.get(c)
+        {
+            out.push(DecodedChar {
+                text: s.to_string(),
+                step: t,
+                prob: p,
+            });
         }
         prev = c;
     }

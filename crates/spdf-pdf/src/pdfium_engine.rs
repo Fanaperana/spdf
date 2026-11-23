@@ -538,12 +538,11 @@ fn extract_rulings(
             continue;
         }
         // White fills (page backgrounds, knock-outs) draw nothing visible.
-        if !stroked {
-            if let Ok(c) = object.fill_color() {
-                if c.alpha() == 0 || (c.red() >= 250 && c.green() >= 250 && c.blue() >= 250) {
-                    continue;
-                }
-            }
+        if !stroked
+            && let Ok(c) = object.fill_color()
+            && (c.alpha() == 0 || (c.red() >= 250 && c.green() >= 250 && c.blue() >= 250))
+        {
+            continue;
         }
         let Ok(matrix) = path.matrix() else {
             continue;
@@ -579,11 +578,11 @@ fn extract_rulings(
                 _ => {}
             }
             cur = Some(p);
-            if seg.is_close() {
-                if let Some(s0) = start {
-                    push_ruling(&mut out, p, s0);
-                    cur = Some(s0);
-                }
+            if seg.is_close()
+                && let Some(s0) = start
+            {
+                push_ruling(&mut out, p, s0);
+                cur = Some(s0);
             }
         }
         // A fill-only path draws a rule only when it is thin; the edges of
@@ -735,10 +734,10 @@ fn page_glyphs(
                 .or_insert_with(|| maps.has_font(&name));
             if known {
                 let mut cs = text.chars();
-                if let (Some(c), None) = (cs.next(), cs.next()) {
-                    if let Some(mapped) = maps.lookup(&name, c as u32) {
-                        text = mapped.to_string();
-                    }
+                if let (Some(c), None) = (cs.next(), cs.next())
+                    && let Some(mapped) = maps.lookup(&name, c as u32)
+                {
+                    text = mapped.to_string();
                 }
             }
         }

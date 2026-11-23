@@ -120,10 +120,10 @@ pub(crate) fn merge_clusters(glyphs: Vec<Glyph>) -> Vec<Glyph> {
 /// in reversed order; restore the logical "lam, alef".
 fn fix_lam_alef(text: &mut String) {
     let mut it = text.chars();
-    if let (Some(a), Some('\u{0644}'), None) = (it.next(), it.next(), it.next()) {
-        if matches!(a, '\u{0627}' | '\u{0622}' | '\u{0623}' | '\u{0625}') {
-            *text = format!("\u{0644}{a}");
-        }
+    if let (Some(a), Some('\u{0644}'), None) = (it.next(), it.next(), it.next())
+        && matches!(a, '\u{0627}' | '\u{0622}' | '\u{0623}' | '\u{0625}')
+    {
+        *text = format!("\u{0644}{a}");
     }
 }
 

@@ -435,25 +435,25 @@ pub fn reflow_columns(text: &str) -> String {
     let mut floor = 0;
     let mut changed = false;
     while i < lines.len() {
-        if !is_blank(&lines[i]) {
-            if let Some(end) = find_region(&lines, i) {
-                // Lines above the region that belong to one of its columns
-                // were emitted as is; take them back into the region.
-                match lead_in(&lines, floor, i, end) {
-                    Some((start, (a, b))) => {
-                        out.truncate(out.len() - (i - start));
-                        let block = &lines[start..end];
-                        let left = block.iter().map(|l| slice(l, 0, a)).collect();
-                        let right = block.iter().map(|l| slice(l, b, usize::MAX)).collect();
-                        emit_split(left, right, 0, &mut out);
-                    }
-                    None => emit_columns(&lines[i..end], 0, &mut out),
+        if !is_blank(&lines[i])
+            && let Some(end) = find_region(&lines, i)
+        {
+            // Lines above the region that belong to one of its columns
+            // were emitted as is; take them back into the region.
+            match lead_in(&lines, floor, i, end) {
+                Some((start, (a, b))) => {
+                    out.truncate(out.len() - (i - start));
+                    let block = &lines[start..end];
+                    let left = block.iter().map(|l| slice(l, 0, a)).collect();
+                    let right = block.iter().map(|l| slice(l, b, usize::MAX)).collect();
+                    emit_split(left, right, 0, &mut out);
                 }
-                floor = end;
-                changed = true;
-                i = end;
-                continue;
+                None => emit_columns(&lines[i..end], 0, &mut out),
             }
+            floor = end;
+            changed = true;
+            i = end;
+            continue;
         }
         out.push(lines[i].iter().collect());
         i += 1;

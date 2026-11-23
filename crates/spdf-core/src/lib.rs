@@ -70,23 +70,23 @@ impl SpdfParser {
             .timeout_secs
             .map(|s| std::time::Instant::now() + std::time::Duration::from_secs(s));
         let check_deadline = |stage: &str| -> SpdfResult<()> {
-            if let Some(d) = deadline {
-                if std::time::Instant::now() >= d {
-                    return Err(SpdfError::InvalidInput(format!(
-                        "spdf: timeout exceeded during {stage}"
-                    )));
-                }
+            if let Some(d) = deadline
+                && std::time::Instant::now() >= d
+            {
+                return Err(SpdfError::InvalidInput(format!(
+                    "spdf: timeout exceeded during {stage}"
+                )));
             }
             Ok(())
         };
         // Reject oversized in-memory blobs before touching pdfium.
-        if let (ParseInput::Bytes(b), Some(cap)) = (&input, self.config.max_input_bytes) {
-            if b.len() as u64 > cap {
-                return Err(SpdfError::InvalidInput(format!(
-                    "spdf: input {} bytes exceeds max_input_bytes {cap}",
-                    b.len()
-                )));
-            }
+        if let (ParseInput::Bytes(b), Some(cap)) = (&input, self.config.max_input_bytes)
+            && b.len() as u64 > cap
+        {
+            return Err(SpdfError::InvalidInput(format!(
+                "spdf: input {} bytes exceeds max_input_bytes {cap}",
+                b.len()
+            )));
         }
         let materialised = self.materialise(input)?;
         let bytes = match materialised {
@@ -101,15 +101,14 @@ impl SpdfParser {
         // pdfium has a chance to pre-allocate. It does NOT catch
         // zip-bomb streams (small compressed, huge decompressed) —
         // those remain a known pre-1.0 issue.
-        if let Some(cap) = self.config.max_declared_stream_bytes {
-            if let Some(n) = scan_max_declared_length(&bytes) {
-                if n > cap {
-                    return Err(SpdfError::InvalidInput(format!(
-                        "spdf: PDF declares a stream of {n} bytes; exceeds \
+        if let Some(cap) = self.config.max_declared_stream_bytes
+            && let Some(n) = scan_max_declared_length(&bytes)
+            && n > cap
+        {
+            return Err(SpdfError::InvalidInput(format!(
+                "spdf: PDF declares a stream of {n} bytes; exceeds \
                          max_declared_stream_bytes cap of {cap}"
-                    )));
-                }
-            }
+            )));
         }
         check_deadline("length-scan")?;
 
@@ -401,13 +400,13 @@ impl SpdfParser {
         input: I,
     ) -> SpdfResult<Box<dyn Iterator<Item = SpdfResult<ParsedPage>> + '_>> {
         let input = input.into();
-        if let (ParseInput::Bytes(b), Some(cap)) = (&input, self.config.max_input_bytes) {
-            if b.len() as u64 > cap {
-                return Err(SpdfError::InvalidInput(format!(
-                    "spdf: input {} bytes exceeds max_input_bytes {cap}",
-                    b.len()
-                )));
-            }
+        if let (ParseInput::Bytes(b), Some(cap)) = (&input, self.config.max_input_bytes)
+            && b.len() as u64 > cap
+        {
+            return Err(SpdfError::InvalidInput(format!(
+                "spdf: input {} bytes exceeds max_input_bytes {cap}",
+                b.len()
+            )));
         }
         let bytes = match self.materialise(input)? {
             Materialised::Pdf { bytes, .. } => bytes,
@@ -416,23 +415,22 @@ impl SpdfParser {
                 return Ok(Box::new(std::iter::once(Ok(page))));
             }
         };
-        if let Some(cap) = self.config.max_declared_stream_bytes {
-            if let Some(n) = scan_max_declared_length(&bytes) {
-                if n > cap {
-                    return Err(SpdfError::InvalidInput(format!(
-                        "spdf: PDF declares a stream of {n} bytes; exceeds \
+        if let Some(cap) = self.config.max_declared_stream_bytes
+            && let Some(n) = scan_max_declared_length(&bytes)
+            && n > cap
+        {
+            return Err(SpdfError::InvalidInput(format!(
+                "spdf: PDF declares a stream of {n} bytes; exceeds \
                          max_declared_stream_bytes cap of {cap}"
-                    )));
-                }
-            }
+            )));
         }
-        if let Some(cap) = self.config.max_expanded_stream_bytes {
-            if let ExpandedScan::Overflowed { at_least } = scan_expanded_flate_bytes(&bytes, cap) {
-                return Err(SpdfError::InvalidInput(format!(
-                    "spdf: FlateDecode streams expand to at least {at_least} \
+        if let Some(cap) = self.config.max_expanded_stream_bytes
+            && let ExpandedScan::Overflowed { at_least } = scan_expanded_flate_bytes(&bytes, cap)
+        {
+            return Err(SpdfError::InvalidInput(format!(
+                "spdf: FlateDecode streams expand to at least {at_least} \
                      bytes; exceeds max_expanded_stream_bytes cap of {cap}"
-                )));
-            }
+            )));
         }
         // #T1.1: auto-enable preserve_very_small_text for AcroForm PDFs.
         let mut cfg = self.config.clone();
