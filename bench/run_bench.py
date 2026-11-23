@@ -30,6 +30,7 @@ Environment overrides: SPDF_BIN, LIT_BIN, SPDF_BENCH_ODL (bench checkout).
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -309,11 +310,16 @@ def suite_odl(engine: str, limit: int | None, refresh: bool, workers: int, ver: 
     }
 
 
-def suite_edge(engine: str, workers: int, repeats: int) -> dict:
+def suite_edge(engine: str, workers: int, repeats: int, case_globs: list[str] | None = None) -> dict:
     cases = sorted(EDGE_DIR.glob("*.json"))
     if not cases:
         raise SystemExit("edge corpus missing: run python bench/edge/make_corpus.py")
-    out_dir = CACHE / "edge-out" / engine
+    if case_globs:
+        cases = [c for c in cases if any(fnmatch.fnmatch(c.stem, g) for g in case_globs)]
+        if not cases:
+            raise SystemExit(f"no edge case matches {case_globs}")
+    # a filtered (quick) run writes elsewhere so the full run's outputs stay inspectable
+    out_dir = CACHE / ("edge-out-quick" if case_globs else "edge-out") / engine
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
@@ -348,6 +354,8 @@ def suite_edge(engine: str, workers: int, repeats: int) -> dict:
         results[n] = r
     text_cases = {k: v for k, v in results.items() if v["kind"] == "text"}
     robust = {k: v for k, v in results.items() if v["kind"] == "robust"}
+    if not text_cases:
+        text_cases = {"_none": {"nid": float("nan"), "f1": float("nan")}}
     huge_r = next((v for k, v in results.items() if "huge" in k), None)
     ocr_cases = [v for v in results.values() if "ocr" in v.get("tags", [])]
     return {
@@ -393,7 +401,14 @@ def main() -> int:
     ap.add_argument("--out", default=str(CACHE / "candidate.json"))
     ap.add_argument("--reuse-liteparse-from", default=str(BENCH / "results" / "latest.json"),
                     help="when liteparse is not in --engines, copy its numbers from this file")
+    ap.add_argument("--cases", default=None,
+                    help="QUICK MODE: comma-separated globs of edge case names (e.g. 'scanned*,simple'). "
+                         "The result is marked partial; compare it with `scoreboard.py quick`. "
+                         "scoreboard.py gate/publish refuse partial runs.")
     args = ap.parse_args()
+    case_globs = [g.strip() for g in args.cases.split(",") if g.strip()] if args.cases else None
+    if case_globs and args.out == str(CACHE / "candidate.json"):
+        args.out = str(CACHE / "quick.json")
     suites = [s for s in args.suites.split(",") if s]
     engines = [e for e in args.engines.split(",") if e]
     CACHE.mkdir(exist_ok=True)
@@ -410,6 +425,8 @@ def main() -> int:
         "versions": versions,
         "engines": {},
     }
+    if case_globs or args.odl_limit:
+        result["partial"] = {"cases": case_globs, "odl_limit": args.odl_limit}
     for eng in engines:
         res = {}
         for s in suites:
@@ -417,7 +434,7 @@ def main() -> int:
             if s == "odl":
                 res["odl"] = suite_odl(eng, args.odl_limit, args.refresh_liteparse, args.workers, versions[eng], args.repeats)
             elif s == "edge":
-                res["edge"] = suite_edge(eng, args.workers, args.repeats)
+                res["edge"] = suite_edge(eng, args.workers, args.repeats, case_globs)
             print(f"[{eng}] {s} done in {time.time() - t0:.0f}s", file=sys.stderr)
         result["engines"][eng] = res
     if "liteparse" not in engines and Path(args.reuse_liteparse_from).exists():
@@ -429,8 +446,12 @@ def main() -> int:
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(result, indent=1, ensure_ascii=False), encoding="utf-8")
     sys.path.insert(0, str(BENCH))
-    from scoreboard import compare_engines, render_console  # noqa: E402
-    print(render_console(compare_engines(result)))
+    from scoreboard import compare_engines, render_console, render_quick  # noqa: E402
+    if case_globs:
+        base = Path(args.reuse_liteparse_from)
+        print(render_quick(result, json.loads(base.read_text(encoding="utf-8")) if base.exists() else None))
+    else:
+        print(render_console(compare_engines(result)))
     print(f"wrote {args.out}")
     return 0
 

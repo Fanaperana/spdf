@@ -57,3 +57,17 @@ bench/.venv/Scripts/python bench/scoreboard.py publish bench/.cache/candidate.js
 LiteParse predictions are cached per LiteParse version under `bench/.cache`; pass
 `--refresh-liteparse` after bumping it. The older `benchmark/` directory (token F1 vs raw
 tesseract on `example/`) is kept for history; `bench/` is the tracked scoreboard.
+
+## Quick mode (for iterating, not for gating)
+
+```powershell
+bench\.venv\Scripts\python.exe bench\run_bench.py --suites edge --engines spdf --cases "scanned*,simple,huge_400_pages,invisible_ocr_layer,table_bordered,cjk_chinese"
+bench\.venv\Scripts\python.exe bench\scoreboard.py quick bench\.cache\quick.json
+```
+
+`--cases` takes comma-separated globs over edge case names. The run is still one process per document with
+a warm-up and a median of `--repeats` (default 3), but only over the chosen cases, so it takes about a
+minute instead of the full run. It writes `bench/.cache/quick.json` (outputs in `bench/.cache/edge-out-quick`)
+and is marked `partial`. `scoreboard.py quick` prints each case as new / accepted baseline / LiteParse and
+flags regressions against the accepted baseline. `gate` and `publish` refuse partial runs: acceptance always
+uses the full 200-document odl suite plus all edge cases.

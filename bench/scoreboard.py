@@ -2,6 +2,7 @@
 
   python bench/scoreboard.py show     [run.json]
   python bench/scoreboard.py gate     <baseline.json> <candidate.json>   # exit 0 ok / 2 regression
+  python bench/scoreboard.py quick    <quick.json> [baseline.json]     # per-case table for a --cases run
   python bench/scoreboard.py publish  <candidate.json> [--label TEXT]   # -> results/latest.json,
                                                                         #    results/history.jsonl, RESULTS.md
 """
@@ -191,8 +192,49 @@ def render_md(run: dict, cmp: dict, history: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_quick(cand: dict, base: dict | None) -> str:
+    """Per-case table for a QUICK (filtered) run: candidate spdf vs the accepted spdf baseline vs LiteParse.
+    Only the cases in the quick run are compared; the aggregate line is over that same subset."""
+    cc = get(cand, "engines.spdf.edge.cases") or {}
+    bc = get(base or {}, "engines.spdf.edge.cases") or {}
+    lc = get(base or {}, "engines.liteparse.edge.cases") or {}
+    out = [f"{'case':26} {'score new/base/lit':>20} {'sec new/base/lit':>24} {'rss MB new/base/lit':>24}"]
+    def f(v, n=3):
+        return "-" if v is None else f"{v:.{n}f}"
+    agg = {"new": [], "base": [], "lit": []}
+    for c in sorted(cc):
+        n, b, l = cc[c], bc.get(c, {}), lc.get(c, {})
+        flag = ""
+        if b.get("peak_rss_mb") is not None and n["peak_rss_mb"] > b["peak_rss_mb"] + max(0.15 * b["peak_rss_mb"], 5):
+            flag += " RSS-REGRESSION"
+        if b.get("wall") is not None and n["wall"] > b["wall"] + max(0.15 * b["wall"], 0.03):
+            flag += " SEC-REGRESSION"
+        if b.get("score") is not None and n["score"] < b["score"] - 0.01:
+            flag += " SCORE-REGRESSION"
+        if l.get("peak_rss_mb") is not None and n["peak_rss_mb"] > l["peak_rss_mb"] + max(0.03 * l["peak_rss_mb"], 2):
+            flag += " (rss loses to LiteParse)"
+        out.append(f"{c:26} {f(n.get('score'),2):>6}/{f(b.get('score'),2)}/{f(l.get('score'),2):<5} "
+                   f"{f(n['wall']):>7}/{f(b.get('wall'))}/{f(l.get('wall')):<6} "
+                   f"{f(n['peak_rss_mb'],1):>7}/{f(b.get('peak_rss_mb'),1)}/{f(l.get('peak_rss_mb'),1):<6}{flag}")
+        if "ocr" in n.get("tags", []) and b and l:
+            agg["new"].append(n["peak_rss_mb"]); agg["base"].append(b["peak_rss_mb"]); agg["lit"].append(l["peak_rss_mb"])
+    if agg["new"]:
+        m = {k: sum(v) / len(v) for k, v in agg.items()}
+        out.append(f"OCR-case RSS mean over these {len(agg['new'])} cases: new {m['new']:.1f} MB | "
+                   f"accepted {m['base']:.1f} MB | LiteParse {m['lit']:.1f} MB; max new {max(agg['new']):.1f} / "
+                   f"accepted {max(agg['base']):.1f} / LiteParse {max(agg['lit']):.1f}")
+    out.append("QUICK run (subset only): indicative, NOT the gate. The loop runs the full suites (3-run medians) before accepting.")
+    return "\n".join(out)
+
+
+def _refuse_partial(run: dict, what: str) -> None:
+    if run.get("partial"):
+        raise SystemExit(f"refusing to {what} a partial (quick) run: {run['partial']}")
+
+
 def publish(cand_path: Path, label: str = "") -> None:
     run = json.loads(cand_path.read_text(encoding="utf-8"))
+    _refuse_partial(run, "publish")
     cmp = compare_engines(run)
     RESULTS.mkdir(exist_ok=True)
     (RESULTS / "latest.json").write_text(json.dumps(run, indent=1, ensure_ascii=False), encoding="utf-8")
@@ -221,10 +263,16 @@ def main(argv: list[str]) -> int:
     if cmd == "gate":
         b = json.loads(Path(argv[2]).read_text(encoding="utf-8"))
         c = json.loads(Path(argv[3]).read_text(encoding="utf-8"))
+        _refuse_partial(c, "gate")
         ok, regs, imps = gate(b, c)
         print(json.dumps({"ok": ok, "regressions": regs, "improvements": imps,
                           "vs_liteparse": {k: v for k, v in compare_engines(c).items() if k != "rows"}}, indent=1))
         return 0 if ok else 2
+    if cmd == "quick":
+        c = json.loads(Path(argv[2]).read_text(encoding="utf-8"))
+        bp = Path(argv[3]) if len(argv) > 3 else RESULTS / "latest.json"
+        print(render_quick(c, json.loads(bp.read_text(encoding="utf-8")) if bp.exists() else None))
+        return 0
     if cmd == "publish":
         label = argv[argv.index("--label") + 1] if "--label" in argv else ""
         publish(Path(argv[2]), label)
