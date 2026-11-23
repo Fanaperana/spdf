@@ -22,6 +22,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/neural/fold.rs");
     println!("cargo:rerun-if-changed=src/neural/head.rs");
     println!("cargo:rerun-if-changed=src/neural/staged.rs");
+    println!("cargo:rerun-if-changed=src/neural/layers.rs");
     println!("cargo:rerun-if-env-changed=SPDF_OCR_MODEL_DIR");
     println!("cargo:rerun-if-env-changed=SPDF_OCR_SKIP_MODELS");
     println!("cargo::rustc-check-cfg=cfg(spdf_neural_models)");
@@ -42,6 +43,10 @@ mod head;
 #[cfg(feature = "neural")]
 #[path = "src/neural/staged.rs"]
 mod staged;
+
+#[cfg(feature = "neural")]
+#[path = "src/neural/layers.rs"]
+mod layers;
 
 #[cfg(feature = "neural")]
 mod neural {
@@ -170,6 +175,29 @@ mod neural {
                     let rs = model_dir.join(format!("{stem}.rs"));
                     let mut src = fs::read_to_string(&rs).expect("read generated model");
                     src = src.replace(BURN_HARD_SWISH, FUSED_HARD_SWISH);
+                    // In large models, each layer's weight pages go back
+                    // to the OS as soon as the layer has run (see
+                    // `layers.rs`).
+                    let model = if path == &det {
+                        "Det"
+                    } else if path == &rec {
+                        "Mobile"
+                    } else if path == &rec_server {
+                        "Server"
+                    } else {
+                        "Latin"
+                    };
+                    let bpk =
+                        fs::read(model_dir.join(format!("{stem}.bpk"))).expect("read weights");
+                    match crate::layers::bpk_spans(&bpk) {
+                        _ if bpk.len() < crate::layers::LAYER_RELEASE_MIN_WEIGHTS => {}
+                        Ok(spans) => {
+                            src = crate::layers::release_after_layers(&src, &spans, model).0;
+                        }
+                        Err(e) => println!(
+                            "cargo:warning=spdf-ocr: {stem}: per-layer weight release skipped: {e}"
+                        ),
+                    }
                     if path != &det {
                         let staged = crate::staged::staged_impl(&src).unwrap_or_else(|| {
                             panic!("{}: no Model::forward to stage", rs.display())

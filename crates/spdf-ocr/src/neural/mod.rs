@@ -30,6 +30,8 @@ mod fold;
 mod fpmode;
 pub mod geom;
 mod head;
+#[cfg(test)]
+mod layers;
 // Only the generated models call into `ops`; without them it is dead code.
 #[cfg_attr(not(spdf_neural_models), allow(dead_code))]
 mod ops;
@@ -467,6 +469,28 @@ fn release_weights(model: OcrModel) {
     }
     #[cfg(not(spdf_neural_models))]
     let _ = model;
+}
+
+/// Drop the resident pages of one layer's weights, bytes `start..end` of
+/// `model`'s embedded weights: the generated models call this right after
+/// each convolution or linear layer of a large model (see `layers.rs`), so
+/// a stage's weights never pile up while its later layers run.
+#[cfg_attr(not(spdf_neural_models), allow(dead_code))]
+fn layer_done(model: OcrModel, start: usize, end: usize) {
+    #[cfg(spdf_neural_models)]
+    {
+        let all: &'static [u8] = match model {
+            OcrModel::Det => &DET_BPK.0,
+            OcrModel::Mobile => &REC_BPK.0,
+            OcrModel::Server => &REC_SERVER_BPK.0,
+            OcrModel::Latin => &REC_LATIN_BPK.0,
+        };
+        if let Some(layer) = all.get(start..end) {
+            resident::release(layer);
+        }
+    }
+    #[cfg(not(spdf_neural_models))]
+    let _ = (model, start, end);
 }
 
 /// Size of a model's embedded weights (0 in builds without models).
@@ -2176,6 +2200,17 @@ mod tests {
                 assert!(!stage_major(weight_bytes(m)));
             }
         }
+    }
+
+    /// Per-layer weight release (generated at build time) applies to the
+    /// stage-major models only: their batches run each layer together.
+    #[test]
+    fn per_layer_release_matches_stage_major() {
+        assert_eq!(layers::LAYER_RELEASE_MIN_WEIGHTS, STAGE_MAJOR_MIN_WEIGHTS);
+        // Ranges are checked: an out-of-range span is ignored.
+        layer_done(OcrModel::Server, usize::MAX - 1, usize::MAX);
+        layer_done(OcrModel::Mobile, 10, 5);
+        layer_done(OcrModel::Det, 0, 1 << 20);
     }
 
     #[test]
