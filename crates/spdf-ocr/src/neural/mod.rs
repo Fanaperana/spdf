@@ -31,6 +31,8 @@ mod fpmode;
 pub mod geom;
 mod head;
 mod resident;
+#[cfg(test)]
+mod staged;
 
 use std::sync::{Mutex, OnceLock};
 
@@ -63,6 +65,52 @@ mod rec_latin_model {
         "/model/latin_PP-OCRv5_rec_mobile.rs"
     ));
 }
+
+/// A recogniser whose forward pass can run stage by stage (the build script
+/// generates the stages, see `staged.rs`), so that a stage's weights can be
+/// released before the next stage runs.
+#[cfg(spdf_neural_models)]
+trait StagedRec: Sync {
+    /// Values carried between stages.
+    type State: Send;
+    /// Number of stages.
+    const STAGES: usize;
+    /// State holding the input batch.
+    fn begin(x: burn::prelude::Tensor<4>) -> Self::State;
+    /// Run stage `k` (stages run in order, each exactly once).
+    fn stage(&self, k: usize, s: &mut Self::State);
+    /// The output once every stage has run.
+    fn finish(s: Self::State) -> burn::prelude::Tensor<3>;
+    /// The whole forward pass.
+    fn forward_all(&self, x: burn::prelude::Tensor<4>) -> burn::prelude::Tensor<3> {
+        let mut s = Self::begin(x);
+        for k in 0..Self::STAGES {
+            self.stage(k, &mut s);
+        }
+        Self::finish(s)
+    }
+}
+
+#[cfg(spdf_neural_models)]
+macro_rules! staged_rec {
+    ($($m:ident),*) => {$(
+        impl StagedRec for $m::Model {
+            type State = $m::Stages;
+            const STAGES: usize = $m::Model::STAGES;
+            fn begin(x: burn::prelude::Tensor<4>) -> Self::State {
+                $m::Model::stage_input(x)
+            }
+            fn stage(&self, k: usize, s: &mut Self::State) {
+                self.run_stage(k, s)
+            }
+            fn finish(s: Self::State) -> burn::prelude::Tensor<3> {
+                $m::Model::stage_output(s)
+            }
+        }
+    )*};
+}
+#[cfg(spdf_neural_models)]
+staged_rec!(rec_model, rec_server_model, rec_latin_model);
 
 /// Upper bound on CPU inference threads by default; beyond this the
 /// small OCR tensors stop scaling.
@@ -373,6 +421,38 @@ fn release_weights(model: OcrModel) {
     let _ = model;
 }
 
+/// Size of a model's embedded weights (0 in builds without models).
+fn weight_bytes(model: OcrModel) -> usize {
+    #[cfg(spdf_neural_models)]
+    {
+        match model {
+            OcrModel::Det => DET_BPK.0.len(),
+            OcrModel::Mobile => REC_BPK.0.len(),
+            OcrModel::Server => REC_SERVER_BPK.0.len(),
+            OcrModel::Latin => REC_LATIN_BPK.0.len(),
+        }
+    }
+    #[cfg(not(spdf_neural_models))]
+    {
+        let _ = model;
+        0
+    }
+}
+
+/// Models with at least this many bytes of weights run stage-major on the
+/// CPU (see [`run_rec`]).
+const STAGE_MAJOR_MIN_WEIGHTS: usize = 32 << 20;
+
+/// Whether a recogniser with `weights` bytes of weights runs stage-major.
+/// Each stage boundary synchronises the line batches and re-faults the
+/// next wave's weights, which costs ~5-10 ms a stage; that only pays off
+/// when the weights are a large share of the pass's memory (the server
+/// recogniser's ~75 MB, which then peaks with ~35 MB resident), not for
+/// the ~8 MB mobile models.
+fn stage_major(weights: usize) -> bool {
+    weights >= STAGE_MAJOR_MIN_WEIGHTS
+}
+
 /// Load a model's weights straight from the binary's read-only data: on the
 /// CPU backend the tensors alias those pages instead of copying them (the
 /// server recogniser alone is ~85 MB).
@@ -575,7 +655,8 @@ impl Runtime {
             &self.charset,
             head.as_ref(),
             crops,
-            |x| m.rec.forward(x),
+            &m.rec,
+            OcrModel::Mobile,
         )
     }
 
@@ -593,7 +674,8 @@ impl Runtime {
             &self.charset,
             head.as_ref(),
             crops,
-            |x| rec.forward(x),
+            rec,
+            OcrModel::Server,
         )
     }
 
@@ -611,7 +693,8 @@ impl Runtime {
             &self.latin_charset,
             head.as_ref(),
             crops,
-            |x| rec.forward(x),
+            rec,
+            OcrModel::Latin,
         )
     }
 
@@ -672,14 +755,22 @@ impl Runtime {
 /// similar width. With `parallel` (CPU backend) the batches are small and
 /// run concurrently on the current rayon pool: a single forward pass only
 /// keeps a few cores busy, so independent lines are the real parallelism.
+///
+/// On the CPU, a model with large weights (see [`stage_major`]) runs each
+/// wave *stage-major*: all its batches go through one stage of the model
+/// before any starts the next, and after every stage the model's weights
+/// (`which`) are released and the workers' allocator caches trimmed, so one
+/// stage's weights and activations do not stack on the next's (see
+/// `staged.rs`).
 #[cfg(spdf_neural_models)]
-fn run_rec(
+fn run_rec<M: StagedRec>(
     parallel: bool,
     device: &burn::prelude::Device,
     charset: &Charset,
     head: Option<&head::CtcHead<'_>>,
     crops: &[(Vec<f32>, usize)],
-    forward: impl Fn(burn::prelude::Tensor<4>) -> burn::prelude::Tensor<3> + Sync,
+    model: &M,
+    which: OcrModel,
 ) -> SpdfResult<Vec<LineRec>> {
     use rayon::prelude::*;
     let mut order: Vec<usize> = (0..crops.len()).collect();
@@ -691,8 +782,8 @@ fn run_rec(
         chunks.push(&order[start..start + len]);
         start += len;
     }
-    let run = |chunk: &&[usize]| rec_batch(device, charset, head, crops, chunk, &forward);
     let mut out: Vec<Option<LineRec>> = (0..crops.len()).map(|_| None).collect();
+    let staged = parallel && stage_major(weight_bytes(which));
     if parallel {
         // Concurrent batches each hold their activations, so run them in
         // waves that bound the padded columns in flight (peak memory).
@@ -702,8 +793,36 @@ fn run_rec(
         for len in rec_waves(&cols, budget) {
             let wave = &chunks[start..start + len];
             start += len;
-            let done: Vec<Vec<(usize, LineRec)>> =
-                wave.par_iter().map(run).collect::<SpdfResult<_>>()?;
+            let done: Vec<Vec<(usize, LineRec)>> = if staged {
+                let mut states: Vec<(&[usize], usize, M::State)> = wave
+                    .par_iter()
+                    .map(|c| {
+                        let (x, bw) = rec_input(device, crops, c);
+                        (*c, bw, M::begin(x))
+                    })
+                    .collect();
+                for k in 0..M::STAGES {
+                    states
+                        .par_iter_mut()
+                        .for_each(|(_, _, s)| model.stage(k, s));
+                    // Every batch is past stage `k`: its weights can go
+                    // (the next wave faults them back in), and so can the
+                    // workers' cached copies of its freed activations.
+                    release_weights(which);
+                    crate::memory::trim_pool();
+                }
+                states
+                    .into_par_iter()
+                    .map(|(c, bw, s)| rec_decode(charset, head, crops, c, bw, M::finish(s)))
+                    .collect::<SpdfResult<_>>()?
+            } else {
+                wave.par_iter()
+                    .map(|c| {
+                        let (x, bw) = rec_input(device, crops, c);
+                        rec_decode(charset, head, crops, c, bw, model.forward_all(x))
+                    })
+                    .collect::<SpdfResult<_>>()?
+            };
             for (i, r) in done.into_iter().flatten() {
                 out[i] = Some(r);
             }
@@ -711,12 +830,17 @@ fn run_rec(
                 // The workers that ran this wave hold its freed activations
                 // in their allocator caches; without a trim the next wave,
                 // scheduled on other workers, commits fresh memory on top.
+                if staged {
+                    release_weights(which);
+                }
                 crate::memory::trim_pool();
             }
         }
     } else {
         for chunk in &chunks {
-            for (i, r) in run(chunk)? {
+            let (x, bw) = rec_input(device, crops, chunk);
+            let y = model.forward_all(x);
+            for (i, r) in rec_decode(charset, head, crops, chunk, bw, y)? {
                 out[i] = Some(r);
             }
         }
@@ -793,16 +917,14 @@ fn rec_waves(cols: &[usize], budget: usize) -> Vec<usize> {
     out
 }
 
-/// Recognise one batch of crops (indices into `crops`).
+/// The recogniser input for one batch of crops (indices into `crops`),
+/// padded to a common width, and that width.
 #[cfg(spdf_neural_models)]
-fn rec_batch(
+fn rec_input(
     device: &burn::prelude::Device,
-    charset: &Charset,
-    head: Option<&head::CtcHead<'_>>,
     crops: &[(Vec<f32>, usize)],
     chunk: &[usize],
-    forward: &impl Fn(burn::prelude::Tensor<4>) -> burn::prelude::Tensor<3>,
-) -> SpdfResult<Vec<(usize, LineRec)>> {
+) -> (burn::prelude::Tensor<4>, usize) {
     use burn::prelude::*;
     let max_w = chunk
         .iter()
@@ -828,7 +950,21 @@ fn rec_batch(
         }
     }
     let x = Tensor::<4>::from_data(TensorData::new(data, [b, 3, REC_H, bw]), device);
-    let y = forward(x);
+    (x, bw)
+}
+
+/// Decode the recogniser output `y` for one batch of crops (`chunk`,
+/// padded to `bw` columns by [`rec_input`]).
+#[cfg(spdf_neural_models)]
+fn rec_decode(
+    charset: &Charset,
+    head: Option<&head::CtcHead<'_>>,
+    crops: &[(Vec<f32>, usize)],
+    chunk: &[usize],
+    bw: usize,
+    y: burn::prelude::Tensor<3>,
+) -> SpdfResult<Vec<(usize, LineRec)>> {
+    let b = chunk.len();
     let [_, steps, width] = y.dims();
     // Without a detached head the model returns one score per class; with
     // one, the classifier's input features.
@@ -1641,6 +1777,44 @@ mod tests {
         // Probabilities pass through unchanged.
         let probs = [0.1f32, 0.7, 0.2, 0.6, 0.3, 0.1];
         assert_eq!(step_maxima(&probs, 3, false), (vec![1, 0], vec![0.7, 0.6]));
+    }
+
+    /// The generated stages chain the same calls as `Model::forward`.
+    #[cfg(spdf_neural_models)]
+    #[test]
+    fn staged_forward_matches_generated_forward() {
+        use burn::prelude::*;
+        let device = Device::flex();
+        let model = load_static(rec_model::Model::new(&device), &REC_BPK.0);
+        let (w, n) = (64, 3 * REC_H * 64);
+        let data: Vec<f32> = (0..n)
+            .map(|i| ((i * 37 % 101) as f32 / 50.0) - 1.0)
+            .collect();
+        let x = Tensor::<4>::from_data(TensorData::new(data, [1, 3, REC_H, w]), &device);
+        let a: Vec<f32> = model
+            .forward(x.clone())
+            .into_data()
+            .try_to_vec::<f32>()
+            .unwrap();
+        let b: Vec<f32> = model
+            .forward_all(x)
+            .into_data()
+            .try_to_vec::<f32>()
+            .unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn only_large_models_run_stage_major() {
+        assert!(!stage_major(0));
+        assert!(!stage_major(8 << 20));
+        assert!(stage_major(75 << 20));
+        if NeuralOcrEngine::models_available() {
+            assert!(stage_major(weight_bytes(OcrModel::Server)));
+            for m in [OcrModel::Det, OcrModel::Mobile, OcrModel::Latin] {
+                assert!(!stage_major(weight_bytes(m)));
+            }
+        }
     }
 
     #[test]

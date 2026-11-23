@@ -21,6 +21,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/neural/fold.rs");
     println!("cargo:rerun-if-changed=src/neural/head.rs");
+    println!("cargo:rerun-if-changed=src/neural/staged.rs");
     println!("cargo:rerun-if-env-changed=SPDF_OCR_MODEL_DIR");
     println!("cargo:rerun-if-env-changed=SPDF_OCR_SKIP_MODELS");
     println!("cargo::rustc-check-cfg=cfg(spdf_neural_models)");
@@ -37,6 +38,10 @@ mod fold;
 #[cfg(feature = "neural")]
 #[path = "src/neural/head.rs"]
 mod head;
+
+#[cfg(feature = "neural")]
+#[path = "src/neural/staged.rs"]
+mod staged;
 
 #[cfg(feature = "neural")]
 mod neural {
@@ -149,6 +154,20 @@ mod neural {
                     .out_dir("model/")
                     .load_strategy(burn_onnx::LoadStrategy::Bytes)
                     .run_from_script();
+                // The recognisers also get a stage-by-stage forward pass
+                // (see `staged.rs`).
+                for path in [&rec, &rec_server, &rec_latin] {
+                    let stem = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .expect("model name");
+                    let rs = model_dir.join(format!("{stem}.rs"));
+                    let mut src = fs::read_to_string(&rs).expect("read generated model");
+                    let staged = crate::staged::staged_impl(&src)
+                        .unwrap_or_else(|| panic!("{}: no Model::forward to stage", rs.display()));
+                    src.push_str(&staged);
+                    fs::write(&rs, src).expect("write generated model");
+                }
                 for dict in [MODELS[2].0, MODELS[5].0] {
                     fs::copy(dir.join(dict), out_dir.join("model").join(dict))
                         .expect("copy OCR dictionary");
