@@ -23,6 +23,7 @@ tokio = { workspace = true, optional = true }
 tesseract = { workspace = true, optional = true }
 burn = { version = "0.22", default-features = false, features = ["std", "wgpu", "flex", "simd", "rayon"], optional = true }
 burn-store = { version = "0.22", optional = true }
+burn-flex = { version = "0.22", default-features = false, features = ["std"], optional = true }
 image = { workspace = true, optional = true }
 rayon = { workspace = true, optional = true }
 
@@ -39,6 +40,6 @@ tesseract = ["dep:tesseract"]
 # Built-in neural OCR (PP-OCRv5 det + rec compiled to Burn, GPU via wgpu with
 # CPU fallback). Model weights are fetched + SHA-256-verified at build time
 # and embedded in the binary.
-neural = ["dep:burn", "dep:burn-store", "dep:image", "dep:rayon", "dep:burn-onnx", "dep:onnx-ir", "dep:ureq", "dep:sha2"]
+neural = ["dep:burn", "dep:burn-store", "dep:burn-flex", "dep:image", "dep:rayon", "dep:burn-onnx", "dep:onnx-ir", "dep:ureq", "dep:sha2"]
 # Additionally allow `SPDF_OCR_DEVICE=cuda` (needs the CUDA driver).
 neural-cuda = ["neural", "burn/cuda"]

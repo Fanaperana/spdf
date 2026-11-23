@@ -6254,6 +6254,7 @@ name = "spdf-ocr"
 version = "0.2.0-alpha.2"
 dependencies = [
  "burn",
+ "burn-flex",
  "burn-onnx",
  "burn-store",
  "image",

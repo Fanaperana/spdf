@@ -49,6 +49,11 @@ mod neural {
     use std::io::Read;
     use std::path::{Path, PathBuf};
 
+    /// How `burn-onnx` spells an ONNX `HardSwish` in generated code, and the
+    /// fused in-place kernel that replaces it (`src/neural/ops.rs`).
+    const BURN_HARD_SWISH: &str = "burn::tensor::activation::hard_swish(";
+    const FUSED_HARD_SWISH: &str = "crate::neural::ops::hard_swish(";
+
     /// (file name, URL, SHA-256). PP-OCRv5 mobile models, Apache-2.0
     /// (PaddlePaddle/PaddleOCR), ONNX conversions published by RapidAI.
     const MODELS: &[(&str, &str, &str)] = &[
@@ -154,18 +159,23 @@ mod neural {
                     .out_dir("model/")
                     .load_strategy(burn_onnx::LoadStrategy::Bytes)
                     .run_from_script();
-                // The recognisers also get a stage-by-stage forward pass
-                // (see `staged.rs`).
-                for path in [&rec, &rec_server, &rec_latin] {
+                // Every model's hard-swish goes through the fused in-place
+                // kernel (see `ops.rs`); the recognisers also get a
+                // stage-by-stage forward pass (see `staged.rs`).
+                for path in [&det, &rec, &rec_server, &rec_latin] {
                     let stem = path
                         .file_stem()
                         .and_then(|s| s.to_str())
                         .expect("model name");
                     let rs = model_dir.join(format!("{stem}.rs"));
                     let mut src = fs::read_to_string(&rs).expect("read generated model");
-                    let staged = crate::staged::staged_impl(&src)
-                        .unwrap_or_else(|| panic!("{}: no Model::forward to stage", rs.display()));
-                    src.push_str(&staged);
+                    src = src.replace(BURN_HARD_SWISH, FUSED_HARD_SWISH);
+                    if path != &det {
+                        let staged = crate::staged::staged_impl(&src).unwrap_or_else(|| {
+                            panic!("{}: no Model::forward to stage", rs.display())
+                        });
+                        src.push_str(&staged);
+                    }
                     fs::write(&rs, src).expect("write generated model");
                 }
                 for dict in [MODELS[2].0, MODELS[5].0] {

@@ -30,6 +30,9 @@ mod fold;
 mod fpmode;
 pub mod geom;
 mod head;
+// Only the generated models call into `ops`; without them it is dead code.
+#[cfg_attr(not(spdf_neural_models), allow(dead_code))]
+mod ops;
 mod resident;
 #[cfg(test)]
 mod staged;
@@ -832,6 +835,11 @@ fn run_rec<M: StagedRec>(
     let mut out: Vec<Option<LineRec>> = (0..crops.len()).map(|_| None).collect();
     let staged = parallel && stage_major(weight_bytes(which));
     if parallel {
+        // With a detached head, classification waits until every batch has
+        // been through the model (see `defer_head`); only the small
+        // per-step features are kept meanwhile.
+        let defer = defer_head(head.is_some(), chunks.len());
+        let mut pending: Vec<RecOut<'_>> = Vec::new();
         // Concurrent batches each hold their activations, so run them in
         // waves that bound the padded columns in flight (peak memory).
         let cols: Vec<usize> = chunks.iter().map(|c| batch_cols(crops, c)).collect();
@@ -840,7 +848,7 @@ fn run_rec<M: StagedRec>(
         for len in rec_waves(&cols, budget) {
             let wave = &chunks[start..start + len];
             start += len;
-            let done: Vec<Vec<(usize, LineRec)>> = if staged {
+            let done: Vec<RecOut<'_>> = if staged {
                 let mut states: Vec<(&[usize], usize, M::State)> = wave
                     .par_iter()
                     .map(|c| {
@@ -860,18 +868,20 @@ fn run_rec<M: StagedRec>(
                 }
                 states
                     .into_par_iter()
-                    .map(|(c, bw, s)| rec_decode(charset, head, crops, c, bw, M::finish(s)))
+                    .map(|(c, bw, s)| rec_output(charset, head, c, bw, M::finish(s)))
                     .collect::<SpdfResult<_>>()?
             } else {
                 wave.par_iter()
                     .map(|c| {
                         let (x, bw) = rec_input(device, crops, c);
-                        rec_decode(charset, head, crops, c, bw, model.forward_all(x))
+                        rec_output(charset, head, c, bw, model.forward_all(x))
                     })
                     .collect::<SpdfResult<_>>()?
             };
-            for (i, r) in done.into_iter().flatten() {
-                out[i] = Some(r);
+            if defer {
+                pending.extend(done);
+            } else {
+                classify_into(&mut out, charset, head, crops, &done);
             }
             if start < chunks.len() {
                 // The workers that ran this wave hold its freed activations
@@ -883,11 +893,19 @@ fn run_rec<M: StagedRec>(
                 crate::memory::trim_pool();
             }
         }
+        if !pending.is_empty() {
+            // The model body is done for this call: drop its weight pages
+            // and the last wave's cached activations before the head's
+            // weights are faulted in, so the two never stack.
+            release_weights(which);
+            crate::memory::trim_pool();
+            classify_into(&mut out, charset, head, crops, &pending);
+        }
     } else {
         for chunk in &chunks {
             let (x, bw) = rec_input(device, crops, chunk);
-            let y = model.forward_all(x);
-            for (i, r) in rec_decode(charset, head, crops, chunk, bw, y)? {
+            let y = rec_output(charset, head, chunk, bw, model.forward_all(x))?;
+            for (i, r) in rec_classify(charset, head, crops, &y) {
                 out[i] = Some(r);
             }
         }
@@ -1000,18 +1018,47 @@ fn rec_input(
     (x, bw)
 }
 
-/// Decode the recogniser output `y` for one batch of crops (`chunk`,
-/// padded to `bw` columns by [`rec_input`]).
+/// Whether `run_rec` classifies a parallel call's batches only after all
+/// of them have been through the model, instead of batch by batch.
+///
+/// A detached CTC head (see `head.rs`) is a weight matrix of its own (the
+/// mobile and server recognisers' 18,385-class heads are 8.8 MB each), read
+/// in full for every line. Classifying while other batches still run keeps
+/// the head's pages resident on top of the model body's weights and the
+/// in-flight activations, the recognition stage's peak. Deferred, the body
+/// runs alone, its pages are released, and the head then runs alone with
+/// only the per-step features (~60 bytes per input column) kept in between:
+/// the same arithmetic in another order, so the text is identical. A single
+/// batch has nothing to overlap with, and without a detached head the model
+/// returns full class scores, far too large to hold for a whole call.
+fn defer_head(detached: bool, batches: usize) -> bool {
+    detached && batches > 1
+}
+
+/// A recogniser batch's output on the host: for each crop of `chunk` (line
+/// indices into the call's crops), `steps` rows of `width` values, the
+/// class scores or, with a detached head, the head's input features. The
+/// batch was padded to `bw` input columns (see `rec_input`).
+#[cfg_attr(not(spdf_neural_models), allow(dead_code))]
+struct RecOut<'c> {
+    chunk: &'c [usize],
+    bw: usize,
+    steps: usize,
+    width: usize,
+    scores: Vec<f32>,
+}
+
+/// Copy a recogniser batch's output `y` (`[batch, steps, width]`) to the
+/// host, after checking that it matches `charset` (and `head`, when the
+/// build detached one).
 #[cfg(spdf_neural_models)]
-fn rec_decode(
+fn rec_output<'c>(
     charset: &Charset,
     head: Option<&head::CtcHead<'_>>,
-    crops: &[&Crop],
-    chunk: &[usize],
+    chunk: &'c [usize],
     bw: usize,
     y: burn::prelude::Tensor<3>,
-) -> SpdfResult<Vec<(usize, LineRec)>> {
-    let b = chunk.len();
+) -> SpdfResult<RecOut<'c>> {
     let [_, steps, width] = y.dims();
     // Without a detached head the model returns one score per class; with
     // one, the classifier's input features.
@@ -1026,10 +1073,28 @@ fn rec_decode(
         .into_data()
         .try_to_vec::<f32>()
         .map_err(|e| SpdfError::Ocr(format!("rec output: {e:?}")))?;
+    Ok(RecOut {
+        chunk,
+        bw,
+        steps,
+        width,
+        scores,
+    })
+}
+
+/// CTC-decode every crop of a batch's output into `(line index, read)`.
+/// Only a crop's content steps are classified, never the batch's padding.
+#[cfg_attr(not(spdf_neural_models), allow(dead_code))]
+fn rec_classify(
+    charset: &Charset,
+    head: Option<&head::CtcHead<'_>>,
+    crops: &[&Crop],
+    out: &RecOut<'_>,
+) -> Vec<(usize, LineRec)> {
+    let (steps, width) = (out.steps, out.width);
     let decode = |bi: usize, i: usize| {
-        let content_steps = (crops[i].1 * steps).div_ceil(bw).clamp(1, steps);
-        let rows = &scores[bi * steps * width..(bi + 1) * steps * width];
-        // Padding steps are never decoded, so never classified either.
+        let content_steps = (crops[i].1 * steps).div_ceil(out.bw).clamp(1, steps);
+        let rows = &out.scores[bi * steps * width..(bi + 1) * steps * width];
         let (idx, probs) = match head {
             Some(h) => h.decode(rows, content_steps),
             None => step_maxima(&rows[..content_steps * width], width, REC_OUTPUT_LOGITS),
@@ -1043,23 +1108,44 @@ fn rec_decode(
             },
         )
     };
-    Ok(match head {
+    match head {
         // Classifying is a large share of the work: spread the crops over
-        // the pool (on the CPU backend this nests inside the batch waves).
-        Some(_) if b > 1 => {
+        // the pool.
+        Some(_) if out.chunk.len() > 1 => {
             use rayon::prelude::*;
-            chunk
+            out.chunk
                 .par_iter()
                 .enumerate()
                 .map(|(bi, &i)| decode(bi, i))
                 .collect()
         }
-        _ => chunk
+        _ => out
+            .chunk
             .iter()
             .enumerate()
             .map(|(bi, &i)| decode(bi, i))
             .collect(),
-    })
+    }
+}
+
+/// [`rec_classify`] a set of batch outputs in parallel into `out`, indexed
+/// by line.
+#[cfg_attr(not(spdf_neural_models), allow(dead_code))]
+fn classify_into(
+    out: &mut [Option<LineRec>],
+    charset: &Charset,
+    head: Option<&head::CtcHead<'_>>,
+    crops: &[&Crop],
+    batches: &[RecOut<'_>],
+) {
+    use rayon::prelude::*;
+    let lines: Vec<Vec<(usize, LineRec)>> = batches
+        .par_iter()
+        .map(|o| rec_classify(charset, head, crops, o))
+        .collect();
+    for (i, r) in lines.into_iter().flatten() {
+        out[i] = Some(r);
+    }
 }
 
 /// Batch lengths for recognising crops sorted by width: GPU batches are
@@ -2117,5 +2203,123 @@ mod tests {
         let e = NeuralOcrEngine::new();
         assert_eq!(e.name(), "neural");
         let _ = NeuralOcrEngine::models_available();
+    }
+}
+
+#[cfg(test)]
+mod deferred_head_tests {
+    use super::*;
+
+    #[test]
+    fn head_is_deferred_only_for_several_batches_with_a_detached_head() {
+        assert!(defer_head(true, 2));
+        assert!(defer_head(true, 9));
+        assert!(!defer_head(true, 1), "one batch has nothing to overlap");
+        assert!(
+            !defer_head(false, 4),
+            "full class scores are too big to hold"
+        );
+    }
+
+    /// Classes: 0 blank, 1 `a`, 2 `b`, 3 space.
+    fn charset() -> Charset {
+        Charset::from_dict("a\nb")
+    }
+
+    /// One-hot rows picking `classes`, `width` values per step.
+    fn rows(classes: &[usize], width: usize) -> Vec<f32> {
+        let mut v = vec![0f32; classes.len() * width];
+        for (t, &c) in classes.iter().enumerate() {
+            v[t * width + c] = 1.0;
+        }
+        v
+    }
+
+    fn text(r: &LineRec) -> String {
+        r.chars.iter().map(|c| c.text.as_str()).collect()
+    }
+
+    /// A batch of two crops padded to 16 input columns, two steps each:
+    /// line 7 is 16 columns wide (both steps are content), line 3 only 8
+    /// (its second step is padding and must not be decoded).
+    fn batch<'c>(chunk: &'c [usize], width: usize, scores: Vec<f32>) -> RecOut<'c> {
+        RecOut {
+            chunk,
+            bw: 16,
+            steps: 2,
+            width,
+            scores,
+        }
+    }
+
+    fn crops() -> Vec<Crop> {
+        (0..8)
+            .map(|i| (Vec::new(), if i == 3 { 8 } else { 16 }))
+            .collect()
+    }
+
+    #[test]
+    fn classify_maps_batch_rows_to_lines_and_skips_padding() {
+        let cs = charset();
+        let owned = crops();
+        let crops: Vec<&Crop> = owned.iter().collect();
+        let chunk = [7, 3];
+        let mut scores = rows(&[1, 2], 4);
+        scores.extend(rows(&[2, 1], 4));
+        let got = rec_classify(&cs, None, &crops, &batch(&chunk, 4, scores));
+        assert_eq!(got.len(), 2);
+        assert_eq!(
+            (got[0].0, text(&got[0].1), got[0].1.content_steps),
+            (7, "ab".into(), 2)
+        );
+        assert_eq!(
+            (got[1].0, text(&got[1].1), got[1].1.content_steps),
+            (3, "b".into(), 1)
+        );
+    }
+
+    #[test]
+    fn deferred_classification_reads_the_same_as_batch_by_batch() {
+        // A detached head mapping 3 features onto the 4 classes: feature f
+        // votes for class f + 1, and the bias favours the blank otherwise.
+        let (k, n) = (3, 4);
+        let mut w = vec![0f32; k * n];
+        for f in 0..k {
+            w[f * n + f + 1] = 10.0;
+        }
+        let b = [1.0, 0.0, 0.0, 0.0];
+        let packed = head::pack(k, n, &w, &b);
+        let head = head::CtcHead::parse(&packed).unwrap();
+        let cs = charset();
+        let owned = crops();
+        let crops: Vec<&Crop> = owned.iter().collect();
+        let (c1, c2) = ([7usize, 3], [5usize, 1]);
+        let feats = |picks: &[usize]| rows(picks, k);
+        let make = || {
+            let mut s1 = feats(&[0, 1]);
+            s1.extend(feats(&[1, 0]));
+            let mut s2 = feats(&[2, 2]);
+            s2.extend(feats(&[0, 2]));
+            vec![batch(&c1, k, s1), batch(&c2, k, s2)]
+        };
+        let mut now: Vec<Option<LineRec>> = (0..8).map(|_| None).collect();
+        for o in make() {
+            for (i, r) in rec_classify(&cs, Some(&head), &crops, &o) {
+                now[i] = Some(r);
+            }
+        }
+        let mut later: Vec<Option<LineRec>> = (0..8).map(|_| None).collect();
+        classify_into(&mut later, &cs, Some(&head), &crops, &make());
+        let read = |v: &[Option<LineRec>]| -> Vec<Option<(String, usize)>> {
+            v.iter()
+                .map(|r| r.as_ref().map(|r| (text(r), r.content_steps)))
+                .collect()
+        };
+        assert_eq!(read(&now), read(&later));
+        let got = read(&later);
+        assert_eq!(got[7], Some(("ab".into(), 2)));
+        assert_eq!(got[3], Some(("b".into(), 1)));
+        assert_eq!(got[5], Some((" ".into(), 2)), "repeats collapse");
+        assert_eq!(got[1], Some(("a ".into(), 2)));
     }
 }
