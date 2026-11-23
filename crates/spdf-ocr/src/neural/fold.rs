@@ -95,6 +95,7 @@ pub struct FoldStats {
     pub after_conv: usize,
     pub before_conv: usize,
     pub split_conv: usize,
+    pub concat_conv: usize,
 }
 
 /// Convolutions whose im2col matrix would have more rows than this
@@ -117,8 +118,218 @@ impl Graph {
                 break;
             }
         }
+        st.concat_conv = self.fuse_concat_convs();
         st.split_conv = self.split_wide_convs(SPLIT_MAX_ROWS, 2);
         st
+    }
+
+    /// Channel count of value `name` (axis 1 of an NCHW tensor), where the
+    /// graph determines it: a convolution's output channels, propagated
+    /// through channel-preserving ops and summed over channel concats.
+    /// `None` when any step is unknown (graph inputs, reshapes, ...).
+    fn channels(&self, name: &str) -> Option<usize> {
+        self.channels_at(name, 0)
+    }
+
+    fn channels_at(&self, name: &str, depth: usize) -> Option<usize> {
+        if depth > 64 {
+            return None;
+        }
+        let n = &self.nodes[self.producer(name)?];
+        match n.op.as_str() {
+            "Conv" => {
+                let w = self.consts.get(n.inputs.get(1)?)?;
+                (w.dims.len() == 4).then_some(w.dims[0] as usize)
+            }
+            "Concat" if n.axis == 1 => n
+                .inputs
+                .iter()
+                .map(|x| self.channels_at(x, depth + 1))
+                .sum(),
+            "Relu" | "Sigmoid" | "HardSigmoid" | "HardSwish" | "LeakyRelu" | "Clip"
+            | "Identity" | "MaxPool" | "AveragePool" | "BatchNormalization" | "Resize"
+            | "Upsample" => self.channels_at(n.inputs.first()?, depth + 1),
+            // Element-wise binary ops: every non-constant operand must
+            // agree (a constant is a scalar or per-channel factor).
+            "Add" | "Sub" | "Mul" | "Div" => {
+                let mut c = None;
+                for x in n.inputs.iter().filter(|x| !self.consts.contains_key(*x)) {
+                    let cx = self.channels_at(x, depth + 1)?;
+                    if c.is_some_and(|c| c != cx) {
+                        return None;
+                    }
+                    c = Some(cx);
+                }
+                c
+            }
+            _ => None,
+        }
+    }
+
+    /// Rewrite every dense convolution over a channel concat into a sum of
+    /// convolutions over its parts, `conv(cat(x₁..xₙ), W) = Σ conv(xᵢ,
+    /// W[:, cᵢ])` (exact for any kernel, padding and stride), so the wide
+    /// concat is never materialised.
+    ///
+    /// Each part's convolution is placed right after the part is produced
+    /// and added to a running sum, instead of where the concat was. In a
+    /// PP-HGNet block (`concat(x, l₁, .., l₆)` → 1×1 squeeze conv) each layer
+    /// output then dies at the next layer, and only the narrow sum lives
+    /// across the block: the server recogniser's 704-channel concats are
+    /// 2.75× its squeeze conv's output.
+    fn fuse_concat_convs(&mut self) -> usize {
+        // Plan the rewrites first: (concat index, conv index, part channels).
+        let mut plans: Vec<(usize, usize, Vec<usize>)> = Vec::new();
+        for (ci, cat) in self.nodes.iter().enumerate() {
+            if cat.removed || cat.op != "Concat" || cat.axis != 1 || cat.inputs.len() < 2 {
+                continue;
+            }
+            let Some(vi) = self.sole_consumer(&cat.outputs[0]) else {
+                continue;
+            };
+            let conv = &self.nodes[vi];
+            if conv.op != "Conv" || conv.group != 1 || conv.inputs.len() < 2 {
+                continue;
+            }
+            if conv.inputs[0] != cat.outputs[0] || conv.inputs[1..].contains(&cat.outputs[0]) {
+                continue;
+            }
+            let Some(w) = self
+                .consts
+                .get(&conv.inputs[1])
+                .filter(|w| w.dims.len() == 4)
+            else {
+                continue;
+            };
+            let parts: Option<Vec<usize>> = cat.inputs.iter().map(|x| self.channels(x)).collect();
+            // The inferred split must account for exactly the weight's input
+            // channels; anything else means a guess was wrong.
+            match parts {
+                Some(p)
+                    if p.iter().all(|&c| c > 0)
+                        && p.iter().sum::<usize>() == w.dims[1] as usize =>
+                {
+                    plans.push((ci, vi, p))
+                }
+                _ => {}
+            }
+        }
+        if plans.is_empty() {
+            return 0;
+        }
+
+        // Per concat input position: the conv + add nodes of that part.
+        let mut pieces: Vec<Vec<Vec<Node>>> = Vec::new();
+        for (ci, vi, parts) in &plans {
+            let (cat, conv) = (self.nodes[*ci].clone(), self.nodes[*vi].clone());
+            let w = self.consts[&conv.inputs[1]].clone();
+            let (cout, cin) = (w.dims[0] as usize, w.dims[1] as usize);
+            let k = (w.dims[2] * w.dims[3]) as usize;
+            let base = format!("{}__cat", conv.outputs[0]);
+            let mut acc: Option<String> = None;
+            let mut c0 = 0;
+            let mut per_part = Vec::new();
+            for (p, (x, &c)) in cat.inputs.iter().zip(parts).enumerate() {
+                let c1 = c0 + c;
+                let tag = format!("{base}{p}");
+                let mut data = Vec::with_capacity(cout * c * k);
+                for o in 0..cout {
+                    data.extend_from_slice(&w.data[(o * cin + c0) * k..(o * cin + c1) * k]);
+                }
+                let wn = format!("{tag}_w");
+                self.consts.insert(
+                    wn.clone(),
+                    Const {
+                        dims: vec![cout as i64, c as i64, w.dims[2], w.dims[3]],
+                        data,
+                    },
+                );
+                let mut inputs: Vec<&str> = vec![x, &wn];
+                if p == 0 {
+                    if let Some(b) = conv.inputs.get(2).filter(|b| !b.is_empty()) {
+                        inputs.push(b);
+                    }
+                }
+                let last = p + 1 == cat.inputs.len();
+                let y = if last && acc.is_none() {
+                    conv.outputs[0].clone()
+                } else {
+                    format!("{tag}_y")
+                };
+                let mut piece = Node::new("Conv", &inputs, &[&y]);
+                piece.attrs_from = conv.attrs_from;
+                piece.zero_pad = conv.zero_pad;
+                let mut nodes = vec![piece];
+                acc = Some(match acc {
+                    None => y,
+                    Some(prev) => {
+                        let sum = if last {
+                            conv.outputs[0].clone()
+                        } else {
+                            format!("{tag}_sum")
+                        };
+                        nodes.push(Node::new("Add", &[&prev, &y], &[&sum]));
+                        sum
+                    }
+                });
+                per_part.push(nodes);
+                c0 = c1;
+            }
+            pieces.push(per_part);
+        }
+
+        // Re-emit the graph, placing each part as soon as its input exists
+        // and every earlier part has been placed (the sum runs in order).
+        let mut produced: HashSet<String> = HashSet::new();
+        let mut dropped: HashSet<usize> = HashSet::new();
+        for (ci, vi, _) in &plans {
+            dropped.insert(*ci);
+            dropped.insert(*vi);
+        }
+        let inputs_of: Vec<Vec<String>> = plans
+            .iter()
+            .map(|(ci, _, _)| self.nodes[*ci].inputs.clone())
+            .collect();
+        let mut next = vec![0usize; plans.len()];
+        let old = std::mem::take(&mut self.nodes);
+        let ready = |x: &str, produced: &HashSet<String>| {
+            produced.contains(x)
+                || !old
+                    .iter()
+                    .any(|n| !n.removed && n.outputs.iter().any(|o| o == x))
+        };
+        let mut emit = |nodes: &mut Vec<Node>, produced: &mut HashSet<String>| loop {
+            let mut progress = false;
+            for f in 0..plans.len() {
+                while next[f] < inputs_of[f].len() && ready(&inputs_of[f][next[f]], produced) {
+                    for n in std::mem::take(&mut pieces[f][next[f]]) {
+                        produced.extend(n.outputs.iter().cloned());
+                        nodes.push(n);
+                    }
+                    next[f] += 1;
+                    progress = true;
+                }
+            }
+            if !progress {
+                break;
+            }
+        };
+        let mut nodes = Vec::with_capacity(old.len());
+        emit(&mut nodes, &mut produced);
+        for (i, n) in old.iter().enumerate() {
+            if dropped.contains(&i) {
+                continue;
+            }
+            // A folded-away node's output name may since belong to another
+            // node; only live producers make a value available.
+            if !n.removed {
+                produced.extend(n.outputs.iter().cloned());
+            }
+            nodes.push(n.clone());
+            emit(&mut nodes, &mut produced);
+        }
+        self.nodes = nodes;
+        plans.len()
     }
 
     /// Split every dense convolution with at least `min_taps` kernel taps
@@ -637,6 +848,7 @@ mod tests {
             let a = |i: usize| vals.get(&n.inputs[i]).cloned();
             let v: Vec<Vec<f32>> = match n.op.as_str() {
                 "Identity" => a(0).unwrap(),
+                "Concat" => (0..n.inputs.len()).flat_map(|i| a(i).unwrap()).collect(),
                 "Slice" => {
                     let x = a(0).unwrap();
                     let (s0, e0) = (
@@ -986,5 +1198,101 @@ mod tests {
         g.outputs.insert("co".into());
         g.outputs.insert("y".into());
         assert_eq!(g.optimize(), FoldStats::default());
+    }
+
+    /// PP-HGNet-style block on 2 input channels: `l1 = relu(conv(x0))`,
+    /// `l2 = relu(conv(l1))`, then a biased 1×1 squeeze conv over
+    /// `concat(x0, l1, l2)` (2 + 3 + 3 channels).
+    fn hg_block() -> Graph {
+        let mut g = Graph::default();
+        let wv = |n: usize, s: f32| -> Vec<f32> { (0..n).map(|i| (i as f32 * s).sin()).collect() };
+        g.consts.insert("w0".into(), k(&[2, 2, 1, 1], &wv(4, 0.9)));
+        g.consts.insert("w1".into(), k(&[3, 2, 1, 1], &wv(6, 0.7)));
+        g.consts.insert("w2".into(), k(&[3, 3, 1, 1], &wv(9, 0.5)));
+        g.consts
+            .insert("wq".into(), k(&[4, 8, 1, 1], &wv(32, 0.31)));
+        g.consts
+            .insert("bq".into(), k(&[4], &[0.1, -0.2, 0.3, -0.4]));
+        let mut cat = Node::new("Concat", &["x0", "l1", "l2"], &["cat"]);
+        cat.axis = 1;
+        let mut squeeze = conv("cat", "wq", "q");
+        squeeze.inputs.push("bq".into());
+        squeeze.attrs_from = Some(7);
+        g.nodes = vec![
+            conv("x", "w0", "x0"),
+            conv("x0", "w1", "c1"),
+            Node::new("Relu", &["c1"], &["l1"]),
+            conv("l1", "w2", "c2"),
+            Node::new("Relu", &["c2"], &["l2"]),
+            cat,
+            squeeze,
+            Node::new("Relu", &["q"], &["y"]),
+        ];
+        g.outputs.insert("y".into());
+        g
+    }
+
+    #[test]
+    fn concat_conv_becomes_running_sum_of_part_convs() {
+        let mut g = hg_block();
+        let x: Vec<Vec<f32>> = (0..2)
+            .map(|c| (0..5).map(|p| (c * 5 + p) as f32 * 0.13 - 0.4).collect())
+            .collect();
+        let want = eval(&g, &x, "y");
+        assert_eq!(g.channels("l1"), Some(3));
+        assert_eq!(g.channels("cat"), Some(8));
+        assert_eq!(g.channels("x"), None, "graph inputs have unknown width");
+        assert_eq!(g.fuse_concat_convs(), 1);
+        let ops: Vec<&str> = g.nodes.iter().map(|n| n.op.as_str()).collect();
+        // Each part's conv follows its producer, so l1 dies at the second
+        // conv instead of living until the concat.
+        assert_eq!(
+            ops,
+            [
+                "Conv", "Conv", "Conv", "Relu", "Conv", "Add", "Conv", "Relu", "Conv", "Add",
+                "Relu"
+            ]
+        );
+        let parts: Vec<&Node> = g
+            .nodes
+            .iter()
+            .filter(|n| n.inputs.iter().any(|s| s.ends_with("_w")))
+            .collect();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0].inputs.len(), 3, "the first part carries the bias");
+        assert!(parts[1..].iter().all(|n| n.inputs.len() == 2));
+        assert!(parts.iter().all(|n| n.attrs_from == Some(7)));
+        let dims: Vec<i64> = parts
+            .iter()
+            .map(|n| g.consts[&n.inputs[1]].dims[1])
+            .collect();
+        assert_eq!(dims, [2, 3, 3]);
+        assert_eq!(g.nodes[9].outputs[0], "q");
+        let got = eval(&g, &x, "y");
+        for (a, b) in want.iter().flatten().zip(got.iter().flatten()) {
+            assert!((a - b).abs() < 1e-5, "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn concat_conv_needs_known_part_widths_and_sole_use() {
+        // A graph input's width is unknown: no rewrite.
+        let mut g = hg_block();
+        g.nodes[5].inputs[0] = "x".into();
+        g.consts.get_mut("wq").unwrap().dims[1] = 8;
+        assert_eq!(g.fuse_concat_convs(), 0);
+        // The concat is also used elsewhere: it must stay materialised.
+        let mut g = hg_block();
+        g.nodes.push(Node::new("Relu", &["cat"], &["side"]));
+        g.outputs.insert("side".into());
+        assert_eq!(g.fuse_concat_convs(), 0);
+        // Inferred widths that disagree with the weights: no rewrite.
+        let mut g = hg_block();
+        g.consts.insert("wq".into(), k(&[4, 9, 1, 1], &[0.1; 36]));
+        assert_eq!(g.fuse_concat_convs(), 0);
+        // Grouped convs mix channels per group: no rewrite.
+        let mut g = hg_block();
+        g.nodes[6].group = 2;
+        assert_eq!(g.fuse_concat_convs(), 0);
     }
 }
