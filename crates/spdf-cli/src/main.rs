@@ -13,12 +13,13 @@ use spdf_core::{OutputFormat, SpdfParser};
 use spdf_types::{Language, ParseInput};
 use tracing_subscriber::{EnvFilter, fmt};
 
-/// OCR inference allocates and frees many multi-megabyte activation
-/// tensors per page. The system allocator hands each of those straight back
-/// to the OS, so the next one page-faults fresh zeroed memory; mimalloc
-/// keeps recently freed segments for reuse.
+mod bigalloc;
+
+/// mimalloc for ordinary blocks (the system allocator page-faults OCR's
+/// stream of mid-sized buffers afresh every time), with multi-megabyte
+/// activation tensors mapped straight from the OS; see [`bigalloc`].
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: bigalloc::Alloc = bigalloc::Alloc;
 
 /// `mi_option_purge_delay` in mimalloc v3 (`libmimalloc-sys`' default).
 const MI_OPTION_PURGE_DELAY: libmimalloc_sys::mi_option_t = 15;
@@ -29,6 +30,7 @@ const MI_OPTION_PURGE_DELAY: libmimalloc_sys::mi_option_t = 15;
 fn tune_allocator() {
     // SAFETY: sets a plain integer option; valid at any time.
     unsafe { libmimalloc_sys::mi_option_set(MI_OPTION_PURGE_DELAY, 1) };
+    bigalloc::init_from_env();
     spdf_core::set_trim_hook(trim_allocator);
 }
 
@@ -39,6 +41,7 @@ fn tune_allocator() {
 fn trim_allocator() {
     // SAFETY: plain call into the allocator; valid on any thread.
     unsafe { libmimalloc_sys::mi_collect(true) };
+    bigalloc::flush();
 }
 
 #[derive(Debug, Parser)]
