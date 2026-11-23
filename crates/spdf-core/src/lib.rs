@@ -20,6 +20,9 @@ use spdf_types::{
 };
 use tracing::{debug, info, warn};
 
+/// Let the binary tell OCR how to trim its global allocator's caches
+/// between stages (see [`spdf_ocr::set_trim_hook`]).
+pub use spdf_ocr::set_trim_hook;
 pub use spdf_types::OutputFormat;
 
 /// High-level document parser.

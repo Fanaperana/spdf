@@ -10,12 +10,14 @@
 mod engine;
 #[cfg(feature = "http")]
 mod http;
+mod memory;
 #[cfg(feature = "neural")]
 pub mod neural;
 #[cfg(feature = "tesseract")]
 mod tesseract_engine;
 
 pub use engine::{OcrEngine, OcrOptions, OcrResult};
+pub use memory::set_trim_hook;
 
 #[cfg(feature = "http")]
 pub use http::HttpOcrEngine;

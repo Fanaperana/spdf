@@ -29,6 +29,16 @@ const MI_OPTION_PURGE_DELAY: libmimalloc_sys::mi_option_t = 15;
 fn tune_allocator() {
     // SAFETY: sets a plain integer option; valid at any time.
     unsafe { libmimalloc_sys::mi_option_set(MI_OPTION_PURGE_DELAY, 1) };
+    spdf_core::set_trim_hook(trim_allocator);
+}
+
+/// Return the calling thread's freed-but-cached memory to the OS. A
+/// thread's purge delay only runs out on its next allocation, so OCR
+/// workers that go idle after a stage would otherwise keep their share of
+/// that stage's peak committed under the next one.
+fn trim_allocator() {
+    // SAFETY: plain call into the allocator; valid on any thread.
+    unsafe { libmimalloc_sys::mi_collect(true) };
 }
 
 #[derive(Debug, Parser)]

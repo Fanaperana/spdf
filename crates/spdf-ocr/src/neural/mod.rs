@@ -97,12 +97,22 @@ const DET_FAST_SIDE: usize = 1280;
 /// has small print: detect again at full size.
 const DET_MIN_LINE_H: f64 = 14.0;
 /// Context kept around the page content when detecting on its bounding
-/// box, in detector pixels, so text near the crop edge sees the same blank
-/// surroundings as on the full page.
+/// box, in detector pixels, so text near the crop edge sees the same
+/// blank surroundings as on the full page.
 const DET_CROP_MARGIN: f64 = 32.0;
+/// [`DET_CROP_MARGIN`] on grainy pages (see [`geom::InkScan::grainy`]):
+/// the detector needs more of the noise texture around the text to tell
+/// line-initial letters from it (with 32 px it clipped them).
+const DET_GRAIN_MARGIN: f64 = 64.0;
 /// Detect on the content's bounding box only when that skips at least this
 /// share of the page area; otherwise use the whole page.
 const DET_CROP_MIN_SAVING: f64 = 0.1;
+/// On the CPU, the detector runs on horizontal strips of at most this many
+/// input pixels: its activations (~80 bytes per input pixel at the peak)
+/// then stay bounded on large, uncropped pages. GPU passes stay whole.
+const DET_CPU_STRIP_PIXELS: usize = 1280 * 512;
+/// Rows of context above and below each strip cut (see [`det_strips`]).
+const DET_STRIP_MARGIN: usize = 64;
 /// Width cap (in multiples of the line height) of the crops used for the
 /// reading-direction vote; a dozen glyphs settle it as well as a full line.
 const ORIENT_MAX_ASPECT: f64 = 10.0;
@@ -203,6 +213,8 @@ impl OcrEngine for NeuralOcrEngine {
         // A poisoned lock only means another page panicked; the models are
         // read-only, so carry on.
         let _page = self.page_lock.lock().unwrap_or_else(|e| e.into_inner());
+        // Rendering / decoding the page freed its scratch on this thread.
+        crate::memory::trim_current();
         let t0 = std::time::Instant::now();
         let run = || {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rt.ocr_page(&rgb)))
@@ -392,6 +404,12 @@ impl Runtime {
         let _ = (REC_OUTPUT_LOGITS, Mutex::new(()));
         // Only the model-backed paths use these.
         let _ = (det_region, scale_rect, Self::parallel, DbParams::default);
+        let _ = (
+            det_strips,
+            strip_rows,
+            DET_CPU_STRIP_PIXELS,
+            DET_STRIP_MARGIN,
+        );
         let _ = REC_CPU_INFLIGHT_COLS;
         Err("neural OCR models were not available when spdf was built".into())
     }
@@ -439,7 +457,7 @@ impl Runtime {
         &self,
         _img: &Rgb<'_>,
         _max_side: usize,
-        _ink: Option<PixRect>,
+        _ink: Option<(PixRect, f64)>,
     ) -> SpdfResult<(Vec<DetBox>, f64)> {
         Err(SpdfError::Ocr("neural OCR unavailable".into()))
     }
@@ -468,27 +486,49 @@ impl Runtime {
         &self,
         img: &Rgb<'_>,
         max_side: usize,
-        ink: Option<PixRect>,
+        ink: Option<(PixRect, f64)>,
     ) -> SpdfResult<(Vec<DetBox>, f64)> {
         use burn::prelude::*;
         let region = det_region(img.w, img.h, max_side, ink);
         let (dw, dh) = det_dims(&region, det_scale(img.w, img.h, max_side));
         let input = det_input(img, &region, dw, dh);
-        let prob: Vec<f32> = {
-            let m = &self.models;
-            let x = Tensor::<4>::from_data(TensorData::new(input, [1, 3, dh, dw]), &m.device);
-            let y = m.det.forward(x);
-            y.into_data()
+        let m = &self.models;
+        let forward = |data: Vec<f32>, h: usize| -> SpdfResult<Vec<f32>> {
+            let x = Tensor::<4>::from_data(TensorData::new(data, [1, 3, h, dw]), &m.device);
+            let prob = m
+                .det
+                .forward(x)
+                .into_data()
                 .try_to_vec::<f32>()
-                .map_err(|e| SpdfError::Ocr(format!("det output: {e:?}")))?
+                .map_err(|e| SpdfError::Ocr(format!("det output: {e:?}")))?;
+            if prob.len() != dw * h {
+                return Err(SpdfError::Ocr(format!(
+                    "det output has {} values, expected {}",
+                    prob.len(),
+                    dw * h
+                )));
+            }
+            Ok(prob)
         };
-        if prob.len() != dw * dh {
-            return Err(SpdfError::Ocr(format!(
-                "det output has {} values, expected {}",
-                prob.len(),
-                dw * dh
-            )));
-        }
+        let budget = if self.parallel() {
+            DET_CPU_STRIP_PIXELS
+        } else {
+            usize::MAX
+        };
+        // Bound the activations on large inputs (see `det_strips`).
+        let strips = det_strips(dw, dh, budget, DET_STRIP_MARGIN);
+        let prob = if let [_] = strips[..] {
+            forward(input, dh)?
+        } else {
+            let mut prob = vec![0f32; dw * dh];
+            for s in &strips {
+                let out = forward(strip_rows(&input, dw, dh, s.y0, s.y1), s.y1 - s.y0)?;
+                let (c0, c1) = (s.core0 - s.y0, s.core1 - s.y0);
+                prob[s.core0 * dw..s.core1 * dw].copy_from_slice(&out[c0 * dw..c1 * dw]);
+                crate::memory::trim_pool();
+            }
+            prob
+        };
         let sx = region.width() as f64 / dw as f64;
         let sy = region.height() as f64 / dh as f64;
         let mut boxes = geom::db_boxes(&prob, dw, dh, &DbParams::default());
@@ -505,7 +545,13 @@ impl Runtime {
     /// Detect text lines: a fast pass on a downscaled page, repeated at
     /// full size only when that pass finds nothing or mostly small print.
     fn detect_adaptive(&self, img: &Rgb<'_>) -> SpdfResult<Vec<DetBox>> {
-        let ink = geom::ink_bounds(img);
+        let scan = geom::ink_bounds(img);
+        let margin = if scan.grainy(img.w, img.h) {
+            DET_GRAIN_MARGIN
+        } else {
+            DET_CROP_MARGIN
+        };
+        let ink = scan.bounds.map(|r| (r, margin));
         if det_size(img.w, img.h, DET_FAST_SIDE) == det_size(img.w, img.h, DET_MAX_SIDE) {
             return Ok(self.detect(img, DET_MAX_SIDE, ink)?.0);
         }
@@ -586,6 +632,7 @@ impl Runtime {
         let sub: Vec<(Vec<f32>, usize)> = idx.iter().map(|&i| crops[i].clone()).collect();
         let latin = self.recognize_crops_latin(&sub)?;
         release_weights(OcrModel::Latin);
+        crate::memory::trim_pool();
         for (i, l) in idx.into_iter().zip(latin) {
             if l.content_steps != recs[i].content_steps {
                 continue;
@@ -611,6 +658,7 @@ impl Runtime {
         let sub: Vec<(Vec<f32>, usize)> = idx.iter().map(|&i| crops[i].clone()).collect();
         let better = self.recognize_crops_server(&sub)?;
         release_weights(OcrModel::Server);
+        crate::memory::trim_pool();
         for (i, r) in idx.into_iter().zip(better) {
             if !r.chars.is_empty() {
                 recs[i] = r;
@@ -658,6 +706,12 @@ fn run_rec(
                 wave.par_iter().map(run).collect::<SpdfResult<_>>()?;
             for (i, r) in done.into_iter().flatten() {
                 out[i] = Some(r);
+            }
+            if start < chunks.len() {
+                // The workers that ran this wave hold its freed activations
+                // in their allocator caches; without a trim the next wave,
+                // scheduled on other workers, commits fresh memory on top.
+                crate::memory::trim_pool();
             }
         }
     } else {
@@ -890,9 +944,11 @@ impl Runtime {
     fn ocr_page(&self, img: &Rgb<'_>) -> SpdfResult<Vec<OcrResult>> {
         let t = std::time::Instant::now();
         let boxes = self.detect_adaptive(img)?;
-        // Each model's weights are released as soon as the page is done
-        // with it, so they do not add to a later stage's peak.
+        // Each model's weights, and the workers' cached free memory, are
+        // released as soon as the page is done with a stage, so they do not
+        // add to a later stage's peak (see `crate::memory`).
         release_weights(OcrModel::Det);
+        crate::memory::trim_pool();
         tracing::debug!(
             ms = t.elapsed().as_millis() as u64,
             n = boxes.len(),
@@ -904,6 +960,7 @@ impl Runtime {
         let t = std::time::Instant::now();
         let phi = self.reading_angle(img, &boxes)?;
         tracing::debug!(ms = t.elapsed().as_millis() as u64, "ocr: orientation");
+        crate::memory::trim_pool();
         let aligned: Vec<DetBox> = boxes.iter().map(|b| align_box(b, phi)).collect();
         let crops: Vec<(Vec<f32>, usize)> = aligned
             .iter()
@@ -912,6 +969,7 @@ impl Runtime {
         let t = std::time::Instant::now();
         let mut recs = self.recognize_crops(&crops)?;
         release_weights(OcrModel::Mobile);
+        crate::memory::trim_pool();
         tracing::debug!(ms = t.elapsed().as_millis() as u64, "ocr: rec");
         let t = std::time::Instant::now();
         self.refine_cjk(&crops, &mut recs)?;
@@ -1136,17 +1194,18 @@ fn det_size(w: usize, h: usize, max_side: usize) -> (usize, usize) {
 }
 
 /// The part of a `w × h` page to run the detector on: the content's
-/// bounding box `ink` plus [`DET_CROP_MARGIN`] detector pixels of context,
-/// at the same scale as the full page (so text is just as large to the
-/// detector). Scans usually have wide blank margins, and the detector's
-/// time and activation memory grow with its input area. The whole page
+/// bounding box plus `margin` detector pixels of context (`ink` holds
+/// both, see [`DET_CROP_MARGIN`]), at the same scale as the full page (so
+/// text is just as large to the detector). Scans usually have wide blank
+/// margins, and the detector's time and activation memory grow with its
+/// input area. The whole page
 /// when there is no ink or the crop would save little.
-fn det_region(w: usize, h: usize, max_side: usize, ink: Option<PixRect>) -> PixRect {
+fn det_region(w: usize, h: usize, max_side: usize, ink: Option<(PixRect, f64)>) -> PixRect {
     let full = PixRect::full(w, h);
-    let Some(ink) = ink else {
+    let Some((ink, margin)) = ink else {
         return full;
     };
-    let margin = (DET_CROP_MARGIN / det_scale(w, h, max_side)).ceil() as usize;
+    let margin = (margin / det_scale(w, h, max_side)).ceil() as usize;
     let r = ink.expand(margin, w, h);
     let area = |r: &PixRect| (r.width() * r.height()) as f64;
     if r.width() == 0 || r.height() == 0 || area(&r) > (1.0 - DET_CROP_MIN_SAVING) * area(&full) {
@@ -1154,6 +1213,65 @@ fn det_region(w: usize, h: usize, max_side: usize, ink: Option<PixRect>) -> PixR
     } else {
         r
     }
+}
+
+/// One horizontal strip of the detector input: rows `y0..y1` go through
+/// the network, and only the probabilities of rows `core0..core1` (inside
+/// them, away from the strip's cut edges) are kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DetStrip {
+    y0: usize,
+    y1: usize,
+    core0: usize,
+    core1: usize,
+}
+
+/// Split a `dw × dh` detector input (sides multiples of 32) into
+/// horizontal strips of at most `budget` pixels each, overlapping by
+/// `margin` rows of context on each inner cut so every kept row sees its
+/// neighbourhood as in the whole image. The cores tile `0..dh` exactly;
+/// every bound is a multiple of 32 (the network's stride). One strip when
+/// the whole input fits, or when the budget leaves no room for a core.
+fn det_strips(dw: usize, dh: usize, budget: usize, margin: usize) -> Vec<DetStrip> {
+    let whole = vec![DetStrip {
+        y0: 0,
+        y1: dh,
+        core0: 0,
+        core1: dh,
+    }];
+    let margin = margin.div_ceil(32) * 32;
+    let max_rows = (budget / dw.max(1)) / 32 * 32;
+    if dw.saturating_mul(dh) <= budget || max_rows < 2 * margin + 32 {
+        return whole;
+    }
+    // Inner strips carry a margin on both sides, so their core is at most
+    // `max_rows - 2 * margin`; spread the rows evenly over the strips.
+    let max_core = max_rows - 2 * margin;
+    let n = dh.div_ceil(max_core).max(2);
+    let core = (dh / 32).div_ceil(n) * 32;
+    let mut out = Vec::with_capacity(n);
+    let mut core0 = 0;
+    while core0 < dh {
+        let core1 = (core0 + core).min(dh);
+        out.push(DetStrip {
+            y0: core0.saturating_sub(margin),
+            y1: (core1 + margin).min(dh),
+            core0,
+            core1,
+        });
+        core0 = core1;
+    }
+    out
+}
+
+/// Rows `y0..y1` of a `3 × dh × dw` planar tensor.
+fn strip_rows(input: &[f32], dw: usize, dh: usize, y0: usize, y1: usize) -> Vec<f32> {
+    let mut out = Vec::with_capacity(3 * (y1 - y0) * dw);
+    for c in 0..3 {
+        let plane = &input[c * dh * dw..(c + 1) * dh * dw];
+        out.extend_from_slice(&plane[y0 * dw..y1 * dw]);
+    }
+    out
 }
 
 /// Resample `region` of the image to `dw × dh` and normalise with the
@@ -1279,6 +1397,54 @@ mod tests {
     }
 
     #[test]
+    fn det_strips_tile_rows_with_context() {
+        // Fits the budget: one pass over the whole input.
+        let one = det_strips(992, 512, 992 * 512, 64);
+        assert_eq!(
+            one,
+            vec![DetStrip {
+                y0: 0,
+                y1: 512,
+                core0: 0,
+                core1: 512
+            }]
+        );
+        // A whole uncropped page at the fast detection size.
+        let (dw, dh) = (992, 1280);
+        let strips = det_strips(dw, dh, DET_CPU_STRIP_PIXELS, 64);
+        assert!(strips.len() > 1);
+        assert_eq!(strips[0].core0, 0);
+        assert_eq!(strips.last().unwrap().core1, dh);
+        for (i, s) in strips.iter().enumerate() {
+            // Cores tile the rows; strips stay within budget and stride.
+            if i > 0 {
+                assert_eq!(s.core0, strips[i - 1].core1);
+            }
+            assert!(dw * (s.y1 - s.y0) <= DET_CPU_STRIP_PIXELS, "{s:?}");
+            for v in [s.y0, s.y1, s.core0, s.core1] {
+                assert_eq!(v % 32, 0, "{s:?}");
+            }
+            // Full context on every inner cut, clipped at the input edges.
+            assert_eq!(s.y0, s.core0.saturating_sub(64));
+            assert_eq!(s.y1, (s.core1 + 64).min(dh));
+        }
+        // A budget too small for any core past the margins: one pass.
+        assert_eq!(det_strips(2560, 3328, 2560 * 128, 64).len(), 1);
+    }
+
+    #[test]
+    fn strip_rows_slices_every_channel() {
+        let (w, h) = (2, 4);
+        let input: Vec<f32> = (0..3 * w * h).map(|v| v as f32).collect();
+        assert_eq!(
+            strip_rows(&input, w, h, 1, 3),
+            vec![
+                2.0, 3.0, 4.0, 5.0, 10.0, 11.0, 12.0, 13.0, 18.0, 19.0, 20.0, 21.0
+            ]
+        );
+    }
+
+    #[test]
     fn detector_region_crops_margins_at_page_scale() {
         // Letter page at 150 dpi; content in the middle with 1" margins.
         let (w, h) = (1275, 1650);
@@ -1288,9 +1454,11 @@ mod tests {
             x1: 1125,
             y1: 1500,
         };
-        let r = det_region(w, h, DET_FAST_SIDE, Some(ink));
+        let r = det_region(w, h, DET_FAST_SIDE, Some((ink, DET_CROP_MARGIN)));
         // 32 detector px of context = 32 / (1280 / 1650) ≈ 42 image px.
         assert_eq!((r.x0, r.y0, r.x1, r.y1), (108, 108, 1167, 1542));
+        let grainy = det_region(w, h, DET_FAST_SIDE, Some((ink, DET_GRAIN_MARGIN)));
+        assert_eq!((grainy.x0, grainy.y0), (67, 67));
         // Same detector scale as the full page, so text keeps its size.
         let (dw, dh) = det_dims(&r, det_scale(w, h, DET_FAST_SIDE));
         let (fw, fh) = det_size(w, h, DET_FAST_SIDE);
@@ -1304,7 +1472,7 @@ mod tests {
             y1: 1630,
         };
         assert_eq!(
-            det_region(w, h, DET_FAST_SIDE, Some(wide)),
+            det_region(w, h, DET_FAST_SIDE, Some((wide, DET_CROP_MARGIN))),
             PixRect::full(w, h)
         );
         assert_eq!(det_region(w, h, DET_FAST_SIDE, None), PixRect::full(w, h));

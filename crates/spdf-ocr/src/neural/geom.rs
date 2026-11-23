@@ -341,11 +341,15 @@ impl PixRect {
 /// Luminance difference from the page background that counts as ink.
 pub const INK_DELTA: i32 = 40;
 
-/// Bounding box of the page content: pixels whose luminance differs from
-/// the background (the most common luminance) by more than [`INK_DELTA`]
-/// and that touch another such pixel (a lone speck is not content).
-/// `None` when nothing qualifies.
-pub fn ink_bounds(img: &Rgb<'_>) -> Option<PixRect> {
+/// Bounding box of the page content: connected (8-neighbour) blobs of
+/// pixels whose luminance differs from the background (the most common
+/// luminance) by more than [`INK_DELTA`], ignoring blobs smaller than
+/// [`min_ink_blob`]. Specks of scanner grain or JPEG noise are scattered
+/// over the whole page but are only a pixel or two each, while glyphs are
+/// far larger; counting them would stretch the box to the full page.
+pub fn ink_bounds(img: &Rgb<'_>) -> InkScan {
+    const UNSEEN: u8 = 1;
+    const SEEN: u8 = 2;
     let (w, h) = (img.w, img.h);
     let luma = |p: &[u8]| (77 * p[0] as i32 + 150 * p[1] as i32 + 29 * p[2] as i32) >> 8;
     let px = img.data.chunks_exact(3).take(w * h);
@@ -353,34 +357,102 @@ pub fn ink_bounds(img: &Rgb<'_>) -> Option<PixRect> {
     for p in px.clone() {
         hist[luma(p) as usize] += 1;
     }
-    let bg = (0..256).max_by_key(|&i| hist[i])? as i32;
-    let ink: Vec<bool> = px.map(|p| (luma(p) - bg).abs() > INK_DELTA).collect();
+    let Some(bg) = (0..256).max_by_key(|&i| hist[i]) else {
+        return InkScan::default();
+    };
+    let bg = bg as i32;
+    // 0 = background, UNSEEN = ink not yet in a blob, SEEN = ink in one.
+    let mut state: Vec<u8> = px
+        .map(|p| {
+            if (luma(p) - bg).abs() > INK_DELTA {
+                UNSEEN
+            } else {
+                0
+            }
+        })
+        .collect();
+    let min_blob = min_ink_blob(w, h);
     let mut r: Option<PixRect> = None;
-    for y in 0..h {
-        for x in 0..w {
-            let i = y * w + x;
-            if !ink[i] {
-                continue;
-            }
-            let touches = (x > 0 && ink[i - 1])
-                || (x + 1 < w && ink[i + 1])
-                || (y > 0 && ink[i - w])
-                || (y + 1 < h && ink[i + w]);
-            if !touches {
-                continue;
-            }
-            let b = r.get_or_insert(PixRect {
-                x0: x,
-                y0: y,
-                x1: x + 1,
-                y1: y + 1,
-            });
-            b.x0 = b.x0.min(x);
-            b.x1 = b.x1.max(x + 1);
-            b.y1 = y + 1;
+    let mut specks = 0;
+    let mut stack = Vec::new();
+    for start in 0..state.len() {
+        if state[start] != UNSEEN {
+            continue;
         }
+        state[start] = SEEN;
+        stack.push(start);
+        let (x, y) = (start % w, start / w);
+        let mut n = 0usize;
+        let mut blob = PixRect {
+            x0: x,
+            y0: y,
+            x1: x + 1,
+            y1: y + 1,
+        };
+        while let Some(i) = stack.pop() {
+            n += 1;
+            let (x, y) = (i % w, i / w);
+            blob.x0 = blob.x0.min(x);
+            blob.x1 = blob.x1.max(x + 1);
+            blob.y0 = blob.y0.min(y);
+            blob.y1 = blob.y1.max(y + 1);
+            for ny in y.saturating_sub(1)..(y + 2).min(h) {
+                for nx in x.saturating_sub(1)..(x + 2).min(w) {
+                    let j = ny * w + nx;
+                    if state[j] == UNSEEN {
+                        state[j] = SEEN;
+                        stack.push(j);
+                    }
+                }
+            }
+        }
+        if n < min_blob {
+            specks += 1;
+            continue;
+        }
+        r = Some(match r {
+            None => blob,
+            Some(b) => PixRect {
+                x0: b.x0.min(blob.x0),
+                y0: b.y0.min(blob.y0),
+                x1: b.x1.max(blob.x1),
+                y1: b.y1.max(blob.y1),
+            },
+        });
     }
-    r
+    InkScan { bounds: r, specks }
+}
+
+/// Specks (ink blobs too small to be content) per million pixels above
+/// which a page counts as grainy. Clean scans and renders have a handful
+/// (stray antialiasing fragments); film grain or JPEG noise, hundreds.
+pub const GRAIN_SPECKS_PER_MPX: usize = 64;
+
+/// What [`ink_bounds`] found on a page.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InkScan {
+    /// Bounding box of the content; `None` when nothing qualifies.
+    pub bounds: Option<PixRect>,
+    /// Ink blobs ignored as too small to be content.
+    pub specks: usize,
+}
+
+impl InkScan {
+    /// Whether a `w × h` page is covered in noise specks (see
+    /// [`GRAIN_SPECKS_PER_MPX`]).
+    pub fn grainy(&self, w: usize, h: usize) -> bool {
+        self.specks * 1_000_000 > GRAIN_SPECKS_PER_MPX * w * h
+    }
+}
+
+/// Smallest ink blob (in pixels) that counts as content on a `w × h`
+/// page: grows with the square of the rendering scale, since a speck of
+/// grain covers more pixels on a finer raster, but never below 3 pixels.
+/// About 10 pixels on a letter page at 150 dpi, where a full stop is ~9
+/// and a capital letter well over 50.
+pub fn min_ink_blob(w: usize, h: usize) -> usize {
+    let s = w.max(h) / 512;
+    (s * s).max(3)
 }
 
 /// Sample the rectangle `r` (reading axis horizontal) into an
@@ -441,12 +513,17 @@ mod tests {
         ink.extend((25..60).map(|x| (x, 70)));
         ink.push((95, 5));
         let d = page(100, 100, 250, 20, &ink);
-        let r = ink_bounds(&Rgb {
+        let scan = ink_bounds(&Rgb {
             data: &d,
             w: 100,
             h: 100,
-        })
-        .unwrap();
+        });
+        assert_eq!(scan.specks, 1);
+        assert!(
+            scan.grainy(100, 100),
+            "1 speck in 10k pixels is 100 per Mpx"
+        );
+        let r = scan.bounds.unwrap();
         assert_eq!(
             r,
             PixRect {
@@ -463,7 +540,7 @@ mod tests {
             w: 100,
             h: 100,
         };
-        assert_eq!(ink_bounds(&dark), Some(r));
+        assert_eq!(ink_bounds(&dark).bounds, Some(r));
         // Faint texture below the ink threshold is background.
         let d = page(100, 100, 250, 230, &ink);
         let faint = Rgb {
@@ -471,7 +548,61 @@ mod tests {
             w: 100,
             h: 100,
         };
-        assert_eq!(ink_bounds(&faint), None);
+        assert_eq!(ink_bounds(&faint), InkScan::default());
+    }
+
+    #[test]
+    fn ink_bounds_ignores_grain_spread_over_the_page() {
+        // A paragraph-sized block of text in the top-left quarter...
+        let mut ink: Vec<(usize, usize)> = (30..90)
+            .flat_map(|x| (40..44).map(move |y| (x, y)))
+            .collect();
+        // ... a thin diagonal stroke (8-connected only) below it ...
+        ink.extend((0..12).map(|i| (30 + i, 60 + i)));
+        // ... and two-pixel grain specks in every corner of the page.
+        for &(x, y) in &[(2, 2), (195, 3), (4, 196), (190, 190), (150, 100)] {
+            ink.extend([(x, y), (x + 1, y)]);
+        }
+        ink.extend([(120, 150), (121, 151)]); // diagonal pair
+        let d = page(200, 200, 245, 30, &ink);
+        let r = ink_bounds(&Rgb {
+            data: &d,
+            w: 200,
+            h: 200,
+        })
+        .bounds
+        .unwrap();
+        assert_eq!(
+            r,
+            PixRect {
+                x0: 30,
+                y0: 40,
+                x1: 90,
+                y1: 72
+            }
+        );
+        // Grain alone is no content.
+        let grain: Vec<(usize, usize)> = (0..20)
+            .flat_map(|i| [(i * 9, i * 7), (i * 9 + 1, i * 7)])
+            .collect();
+        let d = page(200, 200, 245, 30, &grain);
+        let noisy = Rgb {
+            data: &d,
+            w: 200,
+            h: 200,
+        };
+        let scan = ink_bounds(&noisy);
+        assert_eq!(scan.bounds, None);
+        assert_eq!(scan.specks, 20);
+        assert!(scan.grainy(200, 200));
+        assert!(!scan.grainy(2000, 2000), "5 specks per Mpx is clean");
+    }
+
+    #[test]
+    fn min_ink_blob_scales_with_the_raster() {
+        assert_eq!(min_ink_blob(100, 100), 3);
+        assert_eq!(min_ink_blob(1275, 1650), 9);
+        assert_eq!(min_ink_blob(2550, 3300), 36);
     }
 
     #[test]
