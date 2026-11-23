@@ -592,10 +592,8 @@ fn push_ruling(out: &mut Vec<Ruling>, a: (f64, f64), b: (f64, f64)) {
 
 /// Iterate the page's objects and collect every image object.
 ///
-/// For each image, we capture PDF-space bounds (top-left origin, Y flipped)
-/// and attempt to decode the raw pixel buffer to PNG via the `image` crate.
-/// Decode failures are non-fatal: the image entry is still emitted with
-/// `data = None` so downstream OCR can re-render the region from the page.
+/// For each image, we capture PDF-space bounds (top-left origin, Y flipped).
+/// Pixels are not decoded (`data = None`): OCR re-renders the whole page.
 fn extract_images(
     page: &pdfium_render::prelude::PdfPage<'_>,
     frame: &crate::frame::PageFrame,
@@ -603,9 +601,9 @@ fn extract_images(
     use pdfium_render::prelude::PdfPageObjectCommon;
     let mut out = Vec::new();
     for object in page.objects().iter() {
-        let Some(image_obj) = object.as_image_object() else {
+        if object.as_image_object().is_none() {
             continue;
-        };
+        }
         let Ok(bounds) = object.bounds() else {
             continue;
         };
@@ -619,40 +617,22 @@ fn extract_images(
             continue;
         }
 
-        let png_bytes = encode_image_object_to_png(image_obj);
-
         out.push(Image {
             x: left,
             y: frame.y(top),
             width: w,
             height: h,
-            data: png_bytes,
+            // Only the placement is needed (it decides which pages get
+            // OCR, which renders the page itself); decoding and
+            // re-encoding every scan bitmap here cost ~40 ms and a full
+            // RGBA copy per page.
+            data: None,
             scale_factor: None,
             original_orientation_angle: None,
             image_type: Some("embedded".into()),
         });
     }
     out
-}
-
-/// Try to pull the decoded bitmap for an image object and re-encode it as PNG.
-/// Returns `None` on any failure.
-fn encode_image_object_to_png(
-    image_obj: &pdfium_render::prelude::PdfPageImageObject<'_>,
-) -> Option<Vec<u8>> {
-    // `get_raw_image` returns a DynamicImage if pdfium could decode the stream.
-    let dynamic = image_obj.get_raw_image().ok()?;
-    let rgba = dynamic.to_rgba8();
-    let (w, h) = (rgba.width(), rgba.height());
-    if w == 0 || h == 0 {
-        return None;
-    }
-    let mut buf = std::io::Cursor::new(Vec::with_capacity((w * h * 4) as usize));
-    use image::ImageEncoder;
-    image::codecs::png::PngEncoder::new(&mut buf)
-        .write_image(rgba.as_raw(), w, h, image::ExtendedColorType::Rgba8)
-        .ok()?;
-    Some(buf.into_inner())
 }
 
 /// Visible text-like form field widgets (text, combo and list boxes) that

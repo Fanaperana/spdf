@@ -23,6 +23,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SPDF_OCR_MODEL_DIR");
     println!("cargo:rerun-if-env-changed=SPDF_OCR_SKIP_MODELS");
     println!("cargo::rustc-check-cfg=cfg(spdf_neural_models)");
+    println!("cargo::rustc-check-cfg=cfg(spdf_rec_logits)");
     #[cfg(feature = "neural")]
     neural::run();
 }
@@ -92,10 +93,17 @@ mod neural {
                 // its weights before code generation (see `fold.rs`).
                 let opt_dir = out_dir.join("onnx-opt");
                 fs::create_dir_all(&opt_dir).expect("create onnx-opt dir");
-                let opt = |i: usize| {
+                // Recognisers also lose their output softmax (see
+                // `strip_output_softmax`); the runtime decodes logits only
+                // when all three were stripped.
+                let mut logits = 0;
+                let mut opt = |i: usize, strip_softmax: bool| {
                     let dst = opt_dir.join(MODELS[i].0);
-                    match optimize_onnx(&dir.join(MODELS[i].0), &dst) {
-                        Ok(()) => dst,
+                    match optimize_onnx(&dir.join(MODELS[i].0), &dst, strip_softmax) {
+                        Ok(stripped) => {
+                            logits += usize::from(stripped == 1);
+                            dst
+                        }
                         Err(e) => {
                             println!(
                                 "cargo:warning=spdf-ocr: {}: graph folding skipped: {e}",
@@ -105,10 +113,17 @@ mod neural {
                         }
                     }
                 };
-                let det = opt(0);
-                let rec = opt(1);
-                let rec_server = opt(3);
-                let rec_latin = opt(4);
+                let det = opt(0, false);
+                let rec = opt(1, true);
+                let rec_server = opt(3, true);
+                let rec_latin = opt(4, true);
+                if logits == 3 {
+                    println!("cargo:rustc-cfg=spdf_rec_logits");
+                } else {
+                    println!(
+                        "cargo:warning=spdf-ocr: recogniser softmax kept ({logits}/3 stripped)"
+                    );
+                }
                 burn_onnx::ModelGen::new()
                     .input(det.to_str().expect("utf-8 model path"))
                     .input(rec.to_str().expect("utf-8 model path"))
@@ -130,7 +145,9 @@ mod neural {
     }
 
     /// Rewrite `src` with [`crate::fold`] applied and write it to `dst`.
-    fn optimize_onnx(src: &Path, dst: &Path) -> Result<(), String> {
+    /// Fold a model's graph into `dst`; with `strip_softmax`, also drop its
+    /// output softmax. Returns the number of softmax nodes stripped.
+    fn optimize_onnx(src: &Path, dst: &Path, strip_softmax: bool) -> Result<usize, String> {
         use crate::fold;
         use onnx_ir::{Message, ModelProto};
         use std::collections::HashSet;
@@ -138,6 +155,14 @@ mod neural {
 
         let bytes = fs::read(src).map_err(|e| format!("read {}: {e}", src.display()))?;
         let mut model = ModelProto::parse_from_bytes(&bytes).map_err(|e| format!("parse: {e}"))?;
+        // Softmax's default axis is -1 since opset 13, 1 before.
+        let opset = model
+            .opset_import
+            .iter()
+            .filter(|o| o.domain.is_empty() || o.domain == "ai.onnx")
+            .map(|o| o.version)
+            .max()
+            .unwrap_or(13);
         let graph = model.graph.as_mut().ok_or("model has no graph")?;
 
         let mut g = fold::Graph::default();
@@ -175,11 +200,27 @@ mod neural {
             node.zero_pad = zero_pad;
             node.epsilon = attr("epsilon").map_or(1e-5, |a| a.f);
             node.group = attr("group").map_or(1, |a| a.i);
+            node.axis = attr("axis").map_or(if opset >= 13 { -1 } else { 1 }, |a| a.i);
             node.attrs_from = Some(i);
             g.nodes.push(node);
         }
         g.outputs = graph.output.iter().map(|v| v.name.clone()).collect();
+        for v in &graph.output {
+            let rank = v
+                .type_
+                .as_ref()
+                .and_then(|t| t.tensor_type().shape.as_ref())
+                .map(|s| s.dim.len());
+            if let Some(r) = rank.filter(|&r| r > 0) {
+                g.output_ranks.insert(v.name.clone(), r);
+            }
+        }
         let stats = g.optimize();
+        let stripped = if strip_softmax {
+            g.strip_output_softmax()
+        } else {
+            0
+        };
 
         let protos = std::mem::take(&mut graph.node);
         let mut names = HashSet::new();
@@ -263,14 +304,14 @@ mod neural {
         fs::write(dst, out).map_err(|e| format!("write {}: {e}", dst.display()))?;
         // Build-script stdout is kept in the build log (`cargo -vv`).
         println!(
-            "spdf-ocr: {}: folded {} identity, {} post-conv, {} pre-conv ops; split {} convs",
+            "spdf-ocr: {}: folded {} identity, {} post-conv, {} pre-conv ops; split {} convs; stripped {stripped} softmax",
             src.file_name().and_then(|s| s.to_str()).unwrap_or("?"),
             stats.identity,
             stats.after_conv,
             stats.before_conv,
             stats.split_conv
         );
-        Ok(())
+        Ok(stripped)
     }
 
     fn cache_dir() -> PathBuf {

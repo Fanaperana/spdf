@@ -41,6 +41,8 @@ pub struct Node {
     pub epsilon: f32,
     /// `Conv` group count.
     pub group: i64,
+    /// `Softmax` axis (may be negative).
+    pub axis: i64,
     /// Index of the source node whose attributes this node carries (`None`
     /// for nodes the passes created that need no attributes).
     pub attrs_from: Option<usize>,
@@ -57,6 +59,7 @@ impl Node {
             zero_pad: false,
             epsilon: 1e-5,
             group: 1,
+            axis: -1,
             attrs_from: None,
             removed: false,
         }
@@ -71,6 +74,8 @@ pub struct Graph {
     pub int_consts: HashMap<String, Vec<i64>>,
     /// Names the graph exposes as outputs; never folded away.
     pub outputs: HashSet<String>,
+    /// Rank of each graph output, where the model declares it.
+    pub output_ranks: HashMap<String, usize>,
 }
 
 /// Fold counts, for the build log.
@@ -477,6 +482,50 @@ impl Graph {
         folded
     }
 
+    /// Drop a `Softmax` over the last axis that produces a graph output, so
+    /// the graph returns the logits under the same output name. For a CTC
+    /// recogniser the softmax is the costliest op of the head (it writes a
+    /// second steps × classes tensor, ~18k classes per step) while greedy
+    /// decoding only needs each step's arg-max and its probability, which
+    /// the caller can derive from the logits. Returns the number stripped.
+    pub fn strip_output_softmax(&mut self) -> usize {
+        let mut stripped = 0;
+        for i in 0..self.nodes.len() {
+            let n = &self.nodes[i];
+            if n.removed || n.op != "Softmax" || n.inputs.len() != 1 {
+                continue;
+            }
+            let (src, out) = (n.inputs[0].clone(), n.outputs[0].clone());
+            if !self.outputs.contains(&out) || self.outputs.contains(&src) {
+                continue;
+            }
+            let last = match self.output_ranks.get(&out) {
+                Some(&rank) => n.axis == -1 || n.axis == rank as i64 - 1,
+                None => n.axis == -1,
+            };
+            let users = self
+                .nodes
+                .iter()
+                .filter(|m| !m.removed && m.inputs.contains(&src))
+                .count();
+            let producer = self
+                .nodes
+                .iter()
+                .position(|m| !m.removed && m.outputs.contains(&src));
+            let (true, 1, Some(p)) = (last, users, producer) else {
+                continue;
+            };
+            self.nodes[i].removed = true;
+            for o in &mut self.nodes[p].outputs {
+                if *o == src {
+                    *o = out.clone();
+                }
+            }
+            stripped += 1;
+        }
+        stripped
+    }
+
     /// Names of constants still referenced by a live node.
     pub fn live_consts(&self) -> HashSet<String> {
         self.nodes
@@ -663,6 +712,49 @@ mod tests {
         }
         // The original constants are untouched (folds write fresh ones).
         assert_eq!(g.consts["w1"], g0.consts["w1"]);
+    }
+
+    fn softmax_head(axis: i64) -> Graph {
+        let mut softmax = Node::new("Softmax", &["logits"], &["probs"]);
+        softmax.axis = axis;
+        let mut g = Graph {
+            nodes: vec![Node::new("MatMul", &["x", "w"], &["logits"]), softmax],
+            ..Graph::default()
+        };
+        g.outputs.insert("probs".into());
+        g.output_ranks.insert("probs".into(), 3);
+        g
+    }
+
+    #[test]
+    fn strips_last_axis_output_softmax() {
+        for axis in [-1, 2] {
+            let mut g = softmax_head(axis);
+            assert_eq!(g.strip_output_softmax(), 1);
+            let live: Vec<&Node> = g.nodes.iter().filter(|n| !n.removed).collect();
+            assert_eq!(live.len(), 1);
+            // The logits now leave the graph under the old output name.
+            assert_eq!(live[0].outputs, ["probs"]);
+        }
+    }
+
+    #[test]
+    fn keeps_softmax_that_is_not_a_last_axis_output() {
+        // Softmax over another axis changes the arg-max: keep it.
+        assert_eq!(softmax_head(1).strip_output_softmax(), 0);
+        // Rank unknown: only an explicit -1 is known to be the last axis.
+        let mut g = softmax_head(2);
+        g.output_ranks.clear();
+        assert_eq!(g.strip_output_softmax(), 0);
+        // Inner softmax (attention): not a graph output.
+        let mut g = softmax_head(-1);
+        g.nodes.push(Node::new("Relu", &["probs"], &["y"]));
+        g.outputs = ["y".to_string()].into();
+        assert_eq!(g.strip_output_softmax(), 0);
+        // Logits also used elsewhere: the producer must keep its name.
+        let mut g = softmax_head(-1);
+        g.nodes.push(Node::new("Relu", &["logits"], &["z"]));
+        assert_eq!(g.strip_output_softmax(), 0);
     }
 
     #[test]

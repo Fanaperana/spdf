@@ -75,6 +75,12 @@ const REC_BATCH: usize = 8;
 /// Most padded input columns per recogniser batch. Activation memory grows
 /// with batch × width, so long lines go in small batches.
 const REC_BATCH_COLS: usize = 2048;
+/// Column budget of a CPU recogniser batch: small, so separate lines run
+/// on separate cores instead of padding into one wide forward pass.
+const REC_CPU_BATCH_COLS: usize = 512;
+/// Most padded recogniser columns in flight at once on the CPU; bounds the
+/// activation memory of concurrent batches.
+const REC_CPU_INFLIGHT_COLS: usize = 4096;
 /// Pad crop widths up to a multiple of this, so GPU kernels see few shapes.
 const REC_W_BUCKET: usize = 64;
 /// Longest side fed to the detector.
@@ -99,6 +105,11 @@ pub struct NeuralOcrEngine {
     runtime: OnceLock<Result<Runtime, String>>,
     /// Pages the current job will OCR (see [`OcrEngine::prepare`]).
     pages_hint: std::sync::atomic::AtomicUsize,
+    /// One page at a time: a page already spreads its work over every
+    /// core, and concurrent pages would multiply the activation memory.
+    /// Taken on the caller's thread, never inside the inference pool, where
+    /// work stealing could hand a waiting page to the thread holding it.
+    page_lock: Mutex<()>,
 }
 
 /// Fewest pages to OCR in one document for the GPU to be worth its
@@ -116,6 +127,7 @@ impl NeuralOcrEngine {
         Self {
             runtime: OnceLock::new(),
             pages_hint: std::sync::atomic::AtomicUsize::new(1),
+            page_lock: Mutex::new(()),
         }
     }
 
@@ -162,14 +174,16 @@ impl OcrEngine for NeuralOcrEngine {
             w,
             h,
         };
+        // A poisoned lock only means another page panicked; the models are
+        // read-only, so carry on.
+        let _page = self.page_lock.lock().unwrap_or_else(|e| e.into_inner());
         let t0 = std::time::Instant::now();
         let run = || {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rt.ocr_page(&rgb)))
                 .map_err(|_| SpdfError::Ocr("neural OCR backend panicked".into()))
         };
-        // CPU kernels parallelise over the engine's own pool rather than the
-        // caller's page workers: pages share one model behind a lock, so
-        // the per-op parallelism is what makes a page fast.
+        // CPU kernels and recogniser batches parallelise over the engine's
+        // own pool rather than the caller's page workers.
         let out = match &rt.pool {
             Some(pool) => pool.install(run),
             None => run(),
@@ -197,7 +211,7 @@ struct Runtime {
     charset: Charset,
     latin_charset: Charset,
     #[cfg(spdf_neural_models)]
-    models: Mutex<Models>,
+    models: Models,
 }
 
 #[cfg(spdf_neural_models)]
@@ -206,10 +220,18 @@ struct Models {
     det: det_model::Model,
     rec: rec_model::Model,
     /// Server recogniser, loaded on the first CJK line.
-    rec_server: Option<rec_server_model::Model>,
+    rec_server: OnceLock<rec_server_model::Model>,
     /// Latin recogniser, loaded on the first Latin-script line.
-    rec_latin: Option<rec_latin_model::Model>,
+    rec_latin: OnceLock<rec_latin_model::Model>,
 }
+
+// The models are only read during inference, so pages and recogniser
+// batches can run them concurrently without a lock.
+#[cfg(spdf_neural_models)]
+const _: fn() = || {
+    fn sync<T: Send + Sync>() {}
+    sync::<Models>();
+};
 
 /// Embedded weights, aligned so tensors can alias them without a copy.
 #[cfg(spdf_neural_models)]
@@ -250,10 +272,22 @@ fn load_static<M: burn_store::ModuleSnapshot>(mut model: M, data: &'static [u8])
 }
 
 impl Runtime {
+    /// True when recogniser batches should run concurrently (CPU backend).
+    fn parallel(&self) -> bool {
+        self.pool.is_some()
+    }
+
     #[cfg(not(spdf_neural_models))]
     fn init(_pages: usize) -> Result<Self, String> {
-        let _ = (cpu_pool, want_gpu);
-        let _ = Mutex::new(());
+        let _ = (
+            cpu_pool,
+            want_gpu,
+            rec_tasks,
+            rec_waves,
+            batch_cols,
+            step_maxima,
+        );
+        let _ = (REC_OUTPUT_LOGITS, Mutex::new(()));
         Err("neural OCR models were not available when spdf was built".into())
     }
 
@@ -285,13 +319,13 @@ impl Runtime {
             pool,
             charset: Charset::from_dict(DICT),
             latin_charset: Charset::from_dict(LATIN_DICT),
-            models: Mutex::new(Models {
+            models: Models {
                 device,
                 det,
                 rec,
-                rec_server: None,
-                rec_latin: None,
-            }),
+                rec_server: OnceLock::new(),
+                rec_latin: OnceLock::new(),
+            },
         })
     }
 
@@ -324,10 +358,7 @@ impl Runtime {
         let (dw, dh) = det_size(img.w, img.h, max_side);
         let input = det_input(img, dw, dh);
         let prob: Vec<f32> = {
-            let m = self
-                .models
-                .lock()
-                .map_err(|_| SpdfError::Ocr("ocr lock poisoned".into()))?;
+            let m = &self.models;
             let x = Tensor::<4>::from_data(TensorData::new(input, [1, 3, dh, dw]), &m.device);
             let y = m.det.forward(x);
             y.into_data()
@@ -369,43 +400,38 @@ impl Runtime {
     /// with the fast mobile recogniser.
     #[cfg(spdf_neural_models)]
     fn recognize_crops(&self, crops: &[(Vec<f32>, usize)]) -> SpdfResult<Vec<LineRec>> {
-        let m = self
-            .models
-            .lock()
-            .map_err(|_| SpdfError::Ocr("ocr lock poisoned".into()))?;
-        run_rec(&m.device, &self.charset, crops, |x| m.rec.forward(x))
+        let m = &self.models;
+        run_rec(self.parallel(), &m.device, &self.charset, crops, |x| {
+            m.rec.forward(x)
+        })
     }
 
     /// Recognise crops with the larger server recogniser (loaded lazily).
     #[cfg(spdf_neural_models)]
     fn recognize_crops_server(&self, crops: &[(Vec<f32>, usize)]) -> SpdfResult<Vec<LineRec>> {
-        let mut m = self
-            .models
-            .lock()
-            .map_err(|_| SpdfError::Ocr("ocr lock poisoned".into()))?;
-        if m.rec_server.is_none() {
-            let model = load_static(rec_server_model::Model::new(&m.device), &REC_SERVER_BPK.0);
-            m.rec_server = Some(model);
-        }
-        let m = &*m;
-        let rec = m.rec_server.as_ref().expect("loaded above");
-        run_rec(&m.device, &self.charset, crops, |x| rec.forward(x))
+        let m = &self.models;
+        let rec = m.rec_server.get_or_init(|| {
+            load_static(rec_server_model::Model::new(&m.device), &REC_SERVER_BPK.0)
+        });
+        run_rec(self.parallel(), &m.device, &self.charset, crops, |x| {
+            rec.forward(x)
+        })
     }
 
     /// Recognise crops with the Latin recogniser (loaded lazily).
     #[cfg(spdf_neural_models)]
     fn recognize_crops_latin(&self, crops: &[(Vec<f32>, usize)]) -> SpdfResult<Vec<LineRec>> {
-        let mut m = self
-            .models
-            .lock()
-            .map_err(|_| SpdfError::Ocr("ocr lock poisoned".into()))?;
-        if m.rec_latin.is_none() {
-            let model = load_static(rec_latin_model::Model::new(&m.device), &REC_LATIN_BPK.0);
-            m.rec_latin = Some(model);
-        }
-        let m = &*m;
-        let rec = m.rec_latin.as_ref().expect("loaded above");
-        run_rec(&m.device, &self.latin_charset, crops, |x| rec.forward(x))
+        let m = &self.models;
+        let rec = m
+            .rec_latin
+            .get_or_init(|| load_static(rec_latin_model::Model::new(&m.device), &REC_LATIN_BPK.0));
+        run_rec(
+            self.parallel(),
+            &m.device,
+            &self.latin_charset,
+            crops,
+            |x| rec.forward(x),
+        )
     }
 
     /// Re-read every non-CJK line with the Latin recogniser and fuse the two
@@ -458,77 +484,49 @@ impl Runtime {
 }
 
 /// Run a CTC recogniser over normalised-height crops, batching crops of
-/// similar width.
+/// similar width. With `parallel` (CPU backend) the batches are small and
+/// run concurrently on the current rayon pool: a single forward pass only
+/// keeps a few cores busy, so independent lines are the real parallelism.
 #[cfg(spdf_neural_models)]
 fn run_rec(
+    parallel: bool,
     device: &burn::prelude::Device,
     charset: &Charset,
     crops: &[(Vec<f32>, usize)],
-    forward: impl Fn(burn::prelude::Tensor<4>) -> burn::prelude::Tensor<3>,
+    forward: impl Fn(burn::prelude::Tensor<4>) -> burn::prelude::Tensor<3> + Sync,
 ) -> SpdfResult<Vec<LineRec>> {
-    use burn::prelude::*;
+    use rayon::prelude::*;
     let mut order: Vec<usize> = (0..crops.len()).collect();
     order.sort_by_key(|&i| crops[i].1);
-    let mut out: Vec<Option<LineRec>> = (0..crops.len()).map(|_| None).collect();
     let widths: Vec<usize> = order.iter().map(|&i| crops[i].1).collect();
+    let mut chunks = Vec::new();
     let mut start = 0;
-    for len in rec_batches(&widths) {
-        let chunk = &order[start..start + len];
+    for len in rec_tasks(&widths, parallel) {
+        chunks.push(&order[start..start + len]);
         start += len;
-        let max_w = chunk
-            .iter()
-            .map(|&i| crops[i].1)
-            .max()
-            .unwrap_or(REC_W_BUCKET);
-        let bw = max_w.div_ceil(REC_W_BUCKET) * REC_W_BUCKET;
-        let b = chunk.len();
-        let plane = REC_H * bw;
-        let mut data = vec![0f32; b * 3 * plane];
-        for (bi, &i) in chunk.iter().enumerate() {
-            let (crop, cw) = (&crops[i].0, crops[i].1);
-            let cplane = REC_H * cw;
-            for c in 0..3 {
-                // Paddle models were trained on BGR input.
-                let src = &crop[(2 - c) * cplane..(3 - c) * cplane];
-                let dst = &mut data[(bi * 3 + c) * plane..(bi * 3 + c + 1) * plane];
-                for y in 0..REC_H {
-                    for x in 0..cw {
-                        dst[y * bw + x] = src[y * cw + x] / 127.5 - 1.0;
-                    }
-                }
+    }
+    let run = |chunk: &&[usize]| rec_batch(device, charset, crops, chunk, &forward);
+    let mut out: Vec<Option<LineRec>> = (0..crops.len()).map(|_| None).collect();
+    if parallel {
+        // Concurrent batches each hold their activations, so run them in
+        // waves that bound the padded columns in flight (peak memory).
+        let cols: Vec<usize> = chunks.iter().map(|c| batch_cols(crops, c)).collect();
+        let budget = REC_CPU_INFLIGHT_COLS;
+        let mut start = 0;
+        for len in rec_waves(&cols, budget) {
+            let wave = &chunks[start..start + len];
+            start += len;
+            let done: Vec<Vec<(usize, LineRec)>> =
+                wave.par_iter().map(run).collect::<SpdfResult<_>>()?;
+            for (i, r) in done.into_iter().flatten() {
+                out[i] = Some(r);
             }
         }
-        let x = Tensor::<4>::from_data(TensorData::new(data, [b, 3, REC_H, bw]), device);
-        let y = forward(x);
-        let [_, steps, classes] = y.dims();
-        if classes != charset.num_classes() {
-            return Err(SpdfError::Ocr(format!(
-                "rec model has {classes} classes, dictionary expects {}",
-                charset.num_classes()
-            )));
-        }
-        let (maxp, idx) = y.max_dim_with_indices(2);
-        let probs: Vec<f32> = maxp
-            .into_data()
-            .try_to_vec::<f32>()
-            .map_err(|e| SpdfError::Ocr(format!("rec output: {e:?}")))?;
-        let idx: Vec<usize> = idx
-            .into_data()
-            .iter::<i64>()
-            .map(|v| v.max(0) as usize)
-            .collect();
-        for (bi, &i) in chunk.iter().enumerate() {
-            let r = bi * steps..(bi + 1) * steps;
-            let content_steps = (crops[i].1 * steps).div_ceil(bw).clamp(1, steps);
-            let chars = ctc::greedy_decode(
-                &idx[r.clone()][..content_steps],
-                &probs[r][..content_steps],
-                charset,
-            );
-            out[i] = Some(LineRec {
-                chars,
-                content_steps,
-            });
+    } else {
+        for chunk in &chunks {
+            for (i, r) in run(chunk)? {
+                out[i] = Some(r);
+            }
         }
     }
     Ok(out
@@ -537,16 +535,162 @@ fn run_rec(
         .collect())
 }
 
+/// Whether the recognisers output logits (the build stripped their final
+/// softmax, see `fold.rs`) rather than probabilities.
+const REC_OUTPUT_LOGITS: bool = cfg!(spdf_rec_logits);
+
+/// Logits more than this below a step's maximum add under `e^-20` each to
+/// the softmax denominator; skipping their `exp` keeps the decode cheap.
+const SOFTMAX_CUTOFF: f32 = 20.0;
+
+/// Per CTC step (row of `classes` scores): the arg-max class and its
+/// probability. With `logits`, the probability is the softmax of the
+/// maximum, `1 / Σ exp(l - max)`, computed without materialising the full
+/// distribution; otherwise the scores already are probabilities.
+fn step_maxima(scores: &[f32], classes: usize, logits: bool) -> (Vec<usize>, Vec<f32>) {
+    let steps = scores.len() / classes.max(1);
+    let mut idx = Vec::with_capacity(steps);
+    let mut probs = Vec::with_capacity(steps);
+    for row in scores.chunks_exact(classes.max(1)) {
+        let (mut best, mut max) = (0, f32::NEG_INFINITY);
+        for (c, &v) in row.iter().enumerate() {
+            if v > max {
+                (best, max) = (c, v);
+            }
+        }
+        let p = if logits {
+            let floor = max - SOFTMAX_CUTOFF;
+            let sum: f32 = row
+                .iter()
+                .filter(|&&v| v >= floor)
+                .map(|&v| (v - max).exp())
+                .sum();
+            1.0 / sum
+        } else {
+            max
+        };
+        idx.push(best);
+        probs.push(p);
+    }
+    (idx, probs)
+}
+
+/// Padded input columns of one recogniser batch (crops × padded width).
+fn batch_cols(crops: &[(Vec<f32>, usize)], chunk: &[usize]) -> usize {
+    let max_w = chunk.iter().map(|&i| crops[i].1).max().unwrap_or(0);
+    chunk.len() * max_w.div_ceil(REC_W_BUCKET) * REC_W_BUCKET
+}
+
+/// Group consecutive batches (by their padded column counts) into waves
+/// of at most `budget` columns; returns the wave lengths. A batch larger
+/// than the budget forms a wave alone.
+fn rec_waves(cols: &[usize], budget: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    let (mut n, mut sum) = (0, 0);
+    for &c in cols {
+        if n > 0 && sum + c > budget {
+            out.push(n);
+            (n, sum) = (0, 0);
+        }
+        n += 1;
+        sum += c;
+    }
+    if n > 0 {
+        out.push(n);
+    }
+    out
+}
+
+/// Recognise one batch of crops (indices into `crops`).
+#[cfg(spdf_neural_models)]
+fn rec_batch(
+    device: &burn::prelude::Device,
+    charset: &Charset,
+    crops: &[(Vec<f32>, usize)],
+    chunk: &[usize],
+    forward: &impl Fn(burn::prelude::Tensor<4>) -> burn::prelude::Tensor<3>,
+) -> SpdfResult<Vec<(usize, LineRec)>> {
+    use burn::prelude::*;
+    let max_w = chunk
+        .iter()
+        .map(|&i| crops[i].1)
+        .max()
+        .unwrap_or(REC_W_BUCKET);
+    let bw = max_w.div_ceil(REC_W_BUCKET) * REC_W_BUCKET;
+    let b = chunk.len();
+    let plane = REC_H * bw;
+    let mut data = vec![0f32; b * 3 * plane];
+    for (bi, &i) in chunk.iter().enumerate() {
+        let (crop, cw) = (&crops[i].0, crops[i].1);
+        let cplane = REC_H * cw;
+        for c in 0..3 {
+            // Paddle models were trained on BGR input.
+            let src = &crop[(2 - c) * cplane..(3 - c) * cplane];
+            let dst = &mut data[(bi * 3 + c) * plane..(bi * 3 + c + 1) * plane];
+            for y in 0..REC_H {
+                for x in 0..cw {
+                    dst[y * bw + x] = src[y * cw + x] / 127.5 - 1.0;
+                }
+            }
+        }
+    }
+    let x = Tensor::<4>::from_data(TensorData::new(data, [b, 3, REC_H, bw]), device);
+    let y = forward(x);
+    let [_, steps, classes] = y.dims();
+    if classes != charset.num_classes() {
+        return Err(SpdfError::Ocr(format!(
+            "rec model has {classes} classes, dictionary expects {}",
+            charset.num_classes()
+        )));
+    }
+    let scores: Vec<f32> = y
+        .into_data()
+        .try_to_vec::<f32>()
+        .map_err(|e| SpdfError::Ocr(format!("rec output: {e:?}")))?;
+    let (idx, probs) = step_maxima(&scores, classes, REC_OUTPUT_LOGITS);
+    drop(scores);
+    let mut out = Vec::with_capacity(b);
+    for (bi, &i) in chunk.iter().enumerate() {
+        let r = bi * steps..(bi + 1) * steps;
+        let content_steps = (crops[i].1 * steps).div_ceil(bw).clamp(1, steps);
+        let chars = ctc::greedy_decode(
+            &idx[r.clone()][..content_steps],
+            &probs[r][..content_steps],
+            charset,
+        );
+        out.push((
+            i,
+            LineRec {
+                chars,
+                content_steps,
+            },
+        ));
+    }
+    Ok(out)
+}
+
+/// Batch lengths for recognising crops sorted by width: GPU batches are
+/// large ([`REC_BATCH`] crops, [`REC_BATCH_COLS`] columns) to keep the
+/// device busy; CPU batches only group short crops (up to
+/// [`REC_CPU_BATCH_COLS`] columns) so lines can run on separate cores.
+fn rec_tasks(sorted_widths: &[usize], parallel: bool) -> Vec<usize> {
+    if parallel {
+        rec_batches(sorted_widths, REC_BATCH, REC_CPU_BATCH_COLS)
+    } else {
+        rec_batches(sorted_widths, REC_BATCH, REC_BATCH_COLS)
+    }
+}
+
 /// Split crops (sorted by width, ascending) into consecutive batches of at
-/// most `REC_BATCH` crops and `REC_BATCH_COLS` padded columns; returns the
-/// batch lengths. A crop wider than the column budget gets a batch alone.
-fn rec_batches(sorted_widths: &[usize]) -> Vec<usize> {
+/// most `max_n` crops and `max_cols` padded columns; returns the batch
+/// lengths. A crop wider than the column budget gets a batch alone.
+fn rec_batches(sorted_widths: &[usize], max_n: usize, max_cols: usize) -> Vec<usize> {
     let mut out = Vec::new();
     let mut n = 0;
     for &w in sorted_widths {
         // Widths ascend, so the newest crop sets the batch's padded width.
         let bw = w.div_ceil(REC_W_BUCKET) * REC_W_BUCKET;
-        if n > 0 && (n == REC_BATCH || (n + 1) * bw > REC_BATCH_COLS) {
+        if n > 0 && (n == max_n || (n + 1) * bw > max_cols) {
             out.push(n);
             n = 0;
         }
@@ -1071,17 +1215,50 @@ mod tests {
 
     #[test]
     fn rec_batches_respect_count_and_column_budget() {
-        assert_eq!(rec_batches(&[]), Vec::<usize>::new());
+        let gpu = |w: &[usize]| rec_tasks(w, false);
+        assert_eq!(gpu(&[]), Vec::<usize>::new());
         // Short crops: limited by the crop count.
-        assert_eq!(rec_batches(&[100; 20]), vec![8, 8, 4]);
+        assert_eq!(gpu(&[100; 20]), vec![8, 8, 4]);
         // 1000 px pads to 1024: two per 2048-column batch.
-        assert_eq!(rec_batches(&[1000; 5]), vec![2, 2, 1]);
+        assert_eq!(gpu(&[1000; 5]), vec![2, 2, 1]);
         // A crop wider than the whole budget still gets recognised.
-        assert_eq!(rec_batches(&[200, 300, 3200]), vec![2, 1]);
-        let total: usize = rec_batches(&[64, 128, 640, 700, 900, 1500, 3000])
-            .iter()
-            .sum();
+        assert_eq!(gpu(&[200, 300, 3200]), vec![2, 1]);
+        let total: usize = gpu(&[64, 128, 640, 700, 900, 1500, 3000]).iter().sum();
         assert_eq!(total, 7);
+    }
+
+    #[test]
+    fn step_maxima_matches_softmax() {
+        let logits = [1.0f32, 3.0, 0.5, -40.0, 2.0, 2.5, 2.4, 0.0];
+        let (idx, p) = step_maxima(&logits, 4, true);
+        assert_eq!(idx, vec![1, 1]);
+        for (row, &got) in logits.chunks(4).zip(&p) {
+            let max = row.iter().cloned().fold(f32::MIN, f32::max);
+            let want = 1.0 / row.iter().map(|v| (v - max).exp()).sum::<f32>();
+            assert!((got - want).abs() < 1e-6, "{got} vs {want}");
+        }
+        // Probabilities pass through unchanged.
+        let probs = [0.1f32, 0.7, 0.2, 0.6, 0.3, 0.1];
+        assert_eq!(step_maxima(&probs, 3, false), (vec![1, 0], vec![0.7, 0.6]));
+    }
+
+    #[test]
+    fn rec_waves_bound_columns_in_flight() {
+        assert_eq!(rec_waves(&[], 100), Vec::<usize>::new());
+        assert_eq!(rec_waves(&[40, 40, 40, 40], 100), vec![2, 2]);
+        // An oversized batch still runs, alone.
+        assert_eq!(rec_waves(&[30, 500, 30], 100), vec![1, 1, 1]);
+        assert_eq!(rec_waves(&[10; 5], 1000), vec![5]);
+    }
+
+    #[test]
+    fn cpu_rec_tasks_keep_long_lines_apart() {
+        let cpu = |w: &[usize]| rec_tasks(w, true);
+        // Short crops still share a forward pass ...
+        assert_eq!(cpu(&[100; 10]), vec![4, 4, 2]);
+        // ... long lines each get their own, so they run on separate cores.
+        assert_eq!(cpu(&[900, 1200, 1500]), vec![1, 1, 1]);
+        assert_eq!(cpu(&[60, 60, 1500]), vec![2, 1]);
     }
 
     #[test]
