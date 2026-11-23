@@ -68,6 +68,20 @@ pub trait OcrEngine: Send + Sync {
         )))
     }
 
+    /// [`OcrEngine::recognize_rgb`] on a buffer the engine may keep or free
+    /// early: callers that have no further use for the pixels hand them
+    /// over, so an engine can release the page before its memory-heavy
+    /// stages. Default: borrow and delegate.
+    fn recognize_rgb_owned(
+        &self,
+        rgb: Vec<u8>,
+        width: usize,
+        height: usize,
+        options: &OcrOptions,
+    ) -> SpdfResult<Vec<OcrResult>> {
+        self.recognize_rgb(&rgb, width, height, options)
+    }
+
     /// Default batch impl delegates to `recognize` sequentially. Engines with
     /// real batch APIs (e.g. a remote server that accepts a JSON array) should
     /// override for a meaningful throughput win.
@@ -80,5 +94,51 @@ pub trait OcrEngine: Send + Sync {
             .iter()
             .map(|img| self.recognize(img, options))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reports the size and first byte of the pixels it was given.
+    struct Echo;
+
+    impl OcrEngine for Echo {
+        fn name(&self) -> &'static str {
+            "echo"
+        }
+
+        fn recognize(&self, _image: &[u8], _options: &OcrOptions) -> SpdfResult<Vec<OcrResult>> {
+            Ok(Vec::new())
+        }
+
+        fn accepts_rgb(&self) -> bool {
+            true
+        }
+
+        fn recognize_rgb(
+            &self,
+            rgb: &[u8],
+            width: usize,
+            height: usize,
+            _options: &OcrOptions,
+        ) -> SpdfResult<Vec<OcrResult>> {
+            Ok(vec![OcrResult {
+                text: format!("{width}x{height}:{}:{}", rgb.len(), rgb[0]),
+                bbox: [0.0; 4],
+                confidence: 1.0,
+            }])
+        }
+    }
+
+    #[test]
+    fn owned_pixels_default_to_the_borrowing_path() {
+        let opts = OcrOptions::default();
+        let px = vec![7u8; 2 * 3 * 3];
+        let borrowed = Echo.recognize_rgb(&px, 2, 3, &opts).unwrap();
+        let owned = Echo.recognize_rgb_owned(px, 2, 3, &opts).unwrap();
+        assert_eq!(owned[0].text, "2x3:18:7");
+        assert_eq!(owned[0].text, borrowed[0].text);
     }
 }

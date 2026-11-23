@@ -34,6 +34,7 @@ mod resident;
 #[cfg(test)]
 mod staged;
 
+use std::borrow::Cow;
 use std::sync::{Mutex, OnceLock};
 
 use spdf_types::{SpdfError, SpdfResult};
@@ -231,12 +232,12 @@ impl OcrEngine for NeuralOcrEngine {
             .store(pages, std::sync::atomic::Ordering::Relaxed);
     }
 
-    fn recognize(&self, image: &[u8], options: &OcrOptions) -> SpdfResult<Vec<OcrResult>> {
+    fn recognize(&self, image: &[u8], _options: &OcrOptions) -> SpdfResult<Vec<OcrResult>> {
         let img = image::load_from_memory(image)
             .map_err(|e| SpdfError::Ocr(format!("decode page image: {e}")))?
             .to_rgb8();
         let (w, h) = (img.width() as usize, img.height() as usize);
-        self.recognize_rgb(img.as_raw(), w, h, options)
+        self.recognize_page(Cow::Owned(img.into_raw()), w, h)
     }
 
     fn accepts_rgb(&self) -> bool {
@@ -250,6 +251,29 @@ impl OcrEngine for NeuralOcrEngine {
         h: usize,
         _options: &OcrOptions,
     ) -> SpdfResult<Vec<OcrResult>> {
+        self.recognize_page(Cow::Borrowed(data), w, h)
+    }
+
+    fn recognize_rgb_owned(
+        &self,
+        data: Vec<u8>,
+        w: usize,
+        h: usize,
+        _options: &OcrOptions,
+    ) -> SpdfResult<Vec<OcrResult>> {
+        self.recognize_page(Cow::Owned(data), w, h)
+    }
+}
+
+impl NeuralOcrEngine {
+    /// OCR one page of packed RGB pixels; an owned buffer is freed once the
+    /// page's line crops are cut (see [`Runtime::ocr_page`]).
+    fn recognize_page(
+        &self,
+        data: Cow<'_, [u8]>,
+        w: usize,
+        h: usize,
+    ) -> SpdfResult<Vec<OcrResult>> {
         if data.len() < w * h * 3 {
             return Err(SpdfError::Ocr(format!(
                 "{} bytes for a {w}x{h} RGB image",
@@ -257,16 +281,17 @@ impl OcrEngine for NeuralOcrEngine {
             )));
         }
         let rt = self.runtime()?;
-        let rgb = Rgb { data, w, h };
         // A poisoned lock only means another page panicked; the models are
         // read-only, so carry on.
         let _page = self.page_lock.lock().unwrap_or_else(|e| e.into_inner());
         // Rendering / decoding the page freed its scratch on this thread.
         crate::memory::trim_current();
         let t0 = std::time::Instant::now();
-        let run = || {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rt.ocr_page(&rgb)))
-                .map_err(|_| SpdfError::Ocr("neural OCR backend panicked".into()))
+        let run = move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                rt.ocr_page(data, w, h)
+            }))
+            .map_err(|_| SpdfError::Ocr("neural OCR backend panicked".into()))
         };
         // CPU kernels and recogniser batches parallelise over the engine's
         // own pool rather than the caller's page workers.
@@ -283,6 +308,10 @@ impl OcrEngine for NeuralOcrEngine {
         Ok(out)
     }
 }
+
+/// A text line resampled to the recogniser's input height: planar RGB
+/// `u8` samples (`3 × REC_H × width`) and the width.
+type Crop = (Vec<u8>, usize);
 
 /// A recognised line crop.
 struct LineRec {
@@ -543,17 +572,17 @@ impl Runtime {
     }
 
     #[cfg(not(spdf_neural_models))]
-    fn recognize_crops(&self, _crops: &[(Vec<f32>, usize)]) -> SpdfResult<Vec<LineRec>> {
+    fn recognize_crops(&self, _crops: &[&Crop]) -> SpdfResult<Vec<LineRec>> {
         Err(SpdfError::Ocr("neural OCR unavailable".into()))
     }
 
     #[cfg(not(spdf_neural_models))]
-    fn recognize_crops_latin(&self, _crops: &[(Vec<f32>, usize)]) -> SpdfResult<Vec<LineRec>> {
+    fn recognize_crops_latin(&self, _crops: &[&Crop]) -> SpdfResult<Vec<LineRec>> {
         Err(SpdfError::Ocr("neural OCR unavailable".into()))
     }
 
     #[cfg(not(spdf_neural_models))]
-    fn recognize_crops_server(&self, _crops: &[(Vec<f32>, usize)]) -> SpdfResult<Vec<LineRec>> {
+    fn recognize_crops_server(&self, _crops: &[&Crop]) -> SpdfResult<Vec<LineRec>> {
         Err(SpdfError::Ocr("neural OCR unavailable".into()))
     }
 
@@ -646,7 +675,7 @@ impl Runtime {
     /// Recognise normalised-height crops (`REC_H` rows, CHW RGB 0..255)
     /// with the fast mobile recogniser.
     #[cfg(spdf_neural_models)]
-    fn recognize_crops(&self, crops: &[(Vec<f32>, usize)]) -> SpdfResult<Vec<LineRec>> {
+    fn recognize_crops(&self, crops: &[&Crop]) -> SpdfResult<Vec<LineRec>> {
         let m = &self.models;
         let head = rec_head(OcrModel::Mobile)?;
         run_rec(
@@ -662,7 +691,7 @@ impl Runtime {
 
     /// Recognise crops with the larger server recogniser (loaded lazily).
     #[cfg(spdf_neural_models)]
-    fn recognize_crops_server(&self, crops: &[(Vec<f32>, usize)]) -> SpdfResult<Vec<LineRec>> {
+    fn recognize_crops_server(&self, crops: &[&Crop]) -> SpdfResult<Vec<LineRec>> {
         let m = &self.models;
         let rec = m.rec_server.get_or_init(|| {
             load_static(rec_server_model::Model::new(&m.device), &REC_SERVER_BPK.0)
@@ -681,7 +710,7 @@ impl Runtime {
 
     /// Recognise crops with the Latin recogniser (loaded lazily).
     #[cfg(spdf_neural_models)]
-    fn recognize_crops_latin(&self, crops: &[(Vec<f32>, usize)]) -> SpdfResult<Vec<LineRec>> {
+    fn recognize_crops_latin(&self, crops: &[&Crop]) -> SpdfResult<Vec<LineRec>> {
         let m = &self.models;
         let rec = m
             .rec_latin
@@ -702,7 +731,7 @@ impl Runtime {
     /// decodes character by character (see [`ctc::fuse`]): the primary
     /// dictionary has no `ï`, `Ø`, `ź`, ..., while the Latin one has no
     /// Vietnamese tone marks, so each fills the other's gaps.
-    fn refine_latin(&self, crops: &[(Vec<f32>, usize)], recs: &mut [LineRec]) -> SpdfResult<()> {
+    fn refine_latin(&self, crops: &[Crop], recs: &mut [LineRec]) -> SpdfResult<()> {
         let idx: Vec<usize> = recs
             .iter()
             .enumerate()
@@ -712,7 +741,7 @@ impl Runtime {
         if idx.is_empty() {
             return Ok(());
         }
-        let sub: Vec<(Vec<f32>, usize)> = idx.iter().map(|&i| crops[i].clone()).collect();
+        let sub: Vec<&Crop> = idx.iter().map(|&i| &crops[i]).collect();
         let latin = self.recognize_crops_latin(&sub)?;
         release_weights(OcrModel::Latin);
         crate::memory::trim_pool();
@@ -728,7 +757,7 @@ impl Runtime {
     /// Re-read lines the mobile model decoded as mostly CJK with the server
     /// recogniser, which is markedly better on Han / kana glyphs. Latin
     /// lines stay with the mobile model, whose word spacing is better.
-    fn refine_cjk(&self, crops: &[(Vec<f32>, usize)], recs: &mut [LineRec]) -> SpdfResult<()> {
+    fn refine_cjk(&self, crops: &[Crop], recs: &mut [LineRec]) -> SpdfResult<()> {
         let idx: Vec<usize> = recs
             .iter()
             .enumerate()
@@ -738,7 +767,7 @@ impl Runtime {
         if idx.is_empty() {
             return Ok(());
         }
-        let sub: Vec<(Vec<f32>, usize)> = idx.iter().map(|&i| crops[i].clone()).collect();
+        let sub: Vec<&Crop> = idx.iter().map(|&i| &crops[i]).collect();
         let better = self.recognize_crops_server(&sub)?;
         release_weights(OcrModel::Server);
         crate::memory::trim_pool();
@@ -768,7 +797,7 @@ fn run_rec<M: StagedRec>(
     device: &burn::prelude::Device,
     charset: &Charset,
     head: Option<&head::CtcHead<'_>>,
-    crops: &[(Vec<f32>, usize)],
+    crops: &[&Crop],
     model: &M,
     which: OcrModel,
 ) -> SpdfResult<Vec<LineRec>> {
@@ -892,7 +921,7 @@ fn step_maxima(scores: &[f32], classes: usize, logits: bool) -> (Vec<usize>, Vec
 }
 
 /// Padded input columns of one recogniser batch (crops × padded width).
-fn batch_cols(crops: &[(Vec<f32>, usize)], chunk: &[usize]) -> usize {
+fn batch_cols(crops: &[&Crop], chunk: &[usize]) -> usize {
     let max_w = chunk.iter().map(|&i| crops[i].1).max().unwrap_or(0);
     chunk.len() * max_w.div_ceil(REC_W_BUCKET) * REC_W_BUCKET
 }
@@ -922,7 +951,7 @@ fn rec_waves(cols: &[usize], budget: usize) -> Vec<usize> {
 #[cfg(spdf_neural_models)]
 fn rec_input(
     device: &burn::prelude::Device,
-    crops: &[(Vec<f32>, usize)],
+    crops: &[&Crop],
     chunk: &[usize],
 ) -> (burn::prelude::Tensor<4>, usize) {
     use burn::prelude::*;
@@ -944,7 +973,7 @@ fn rec_input(
             let dst = &mut data[(bi * 3 + c) * plane..(bi * 3 + c + 1) * plane];
             for y in 0..REC_H {
                 for x in 0..cw {
-                    dst[y * bw + x] = src[y * cw + x] / 127.5 - 1.0;
+                    dst[y * bw + x] = f32::from(src[y * cw + x]) / 127.5 - 1.0;
                 }
             }
         }
@@ -959,7 +988,7 @@ fn rec_input(
 fn rec_decode(
     charset: &Charset,
     head: Option<&head::CtcHead<'_>>,
-    crops: &[(Vec<f32>, usize)],
+    crops: &[&Crop],
     chunk: &[usize],
     bw: usize,
     y: burn::prelude::Tensor<3>,
@@ -1077,7 +1106,11 @@ fn mostly_cjk(chars: &[ctc::DecodedChar]) -> bool {
 }
 
 impl Runtime {
-    fn ocr_page(&self, img: &Rgb<'_>) -> SpdfResult<Vec<OcrResult>> {
+    /// OCR one page of packed RGB pixels (`w × h × 3` bytes). An owned
+    /// buffer is freed as soon as the line crops are cut, so the page does
+    /// not stay resident under the recognisers' peak.
+    fn ocr_page(&self, data: Cow<'_, [u8]>, w: usize, h: usize) -> SpdfResult<Vec<OcrResult>> {
+        let img = &Rgb { data: &data, w, h };
         let t = std::time::Instant::now();
         let boxes = self.detect_adaptive(img)?;
         // Each model's weights, and the workers' cached free memory, are
@@ -1096,14 +1129,21 @@ impl Runtime {
         let t = std::time::Instant::now();
         let phi = self.reading_angle(img, &boxes)?;
         tracing::debug!(ms = t.elapsed().as_millis() as u64, "ocr: orientation");
+        // The vote read a few lines with the mobile recogniser: release its
+        // weight pages too, so the line pass faults in only what it touches
+        // on top of the trimmed heap instead of the vote's leftovers.
+        release_weights(OcrModel::Mobile);
         crate::memory::trim_pool();
         let aligned: Vec<DetBox> = boxes.iter().map(|b| align_box(b, phi)).collect();
-        let crops: Vec<(Vec<f32>, usize)> = aligned
+        let crops: Vec<Crop> = aligned
             .iter()
             .map(|b| crop_line(img, &b.rect, false))
             .collect();
+        // Everything below works on the crops; an owned page can go.
+        drop(data);
         let t = std::time::Instant::now();
-        let mut recs = self.recognize_crops(&crops)?;
+        let refs: Vec<&Crop> = crops.iter().collect();
+        let mut recs = self.recognize_crops(&refs)?;
         release_weights(OcrModel::Mobile);
         crate::memory::trim_pool();
         tracing::debug!(ms = t.elapsed().as_millis() as u64, "ocr: rec");
@@ -1113,7 +1153,7 @@ impl Runtime {
         let t = std::time::Instant::now();
         self.refine_latin(&crops, &mut recs)?;
         tracing::debug!(ms = t.elapsed().as_millis() as u64, "ocr: rec latin");
-        let frame = UprightFrame::new(img.w as f64, img.h as f64, phi);
+        let frame = UprightFrame::new(w as f64, h as f64, phi);
         let mut out = Vec::new();
         for (b, rec) in aligned.iter().zip(recs) {
             let words = ctc::split_words(&rec.chars, rec.content_steps);
@@ -1188,7 +1228,8 @@ impl Runtime {
             crops.push(crop_line(img, &r, false));
             crops.push(crop_line(img, &r, true));
         }
-        let recs = self.recognize_crops(&crops)?;
+        let refs: Vec<&Crop> = crops.iter().collect();
+        let recs = self.recognize_crops(&refs)?;
         let (mut fwd, mut back) = (0.0, 0.0);
         for pair in recs.chunks(2) {
             fwd += ctc::line_confidence(&pair[0].chars) * pair[0].chars.len().max(1) as f64;
@@ -1437,9 +1478,13 @@ fn det_input(img: &Rgb<'_>, region: &PixRect, dw: usize, dh: usize) -> Vec<f32> 
 }
 
 /// Crop a text line to the recogniser's input height, preserving aspect.
-fn crop_line(img: &Rgb<'_>, r: &RotRect, flip: bool) -> (Vec<f32>, usize) {
+///
+/// Crops are kept as 8-bit samples (a quarter of `f32`; a page's crops
+/// stay alive through every recogniser pass) and normalised per batch by
+/// [`rec_input`]. Paddle's own pipeline resizes the `u8` image the same way.
+fn crop_line(img: &Rgb<'_>, r: &RotRect, flip: bool) -> Crop {
     let w = ((REC_H as f64 * r.w / r.h.max(1.0)).round() as usize).clamp(REC_STRIDE, REC_MAX_W);
-    (geom::crop_rotrect(img, r, w, REC_H, flip), w)
+    (geom::crop_rotrect_u8(img, r, w, REC_H, flip), w)
 }
 
 /// Threads for CPU inference: `SPDF_OCR_THREADS` if set, else every

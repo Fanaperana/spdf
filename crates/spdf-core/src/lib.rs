@@ -321,9 +321,9 @@ impl SpdfParser {
                 .map(|&(idx, page_num)| {
                     // Engines that work on pixels skip the PNG round trip.
                     let recognized = if ocr.accepts_rgb() {
-                        engine
-                            .render_page_rgb(doc, page_num, dpi)
-                            .map(|px| ocr.recognize_rgb(&px.data, px.width, px.height, &options))
+                        engine.render_page_rgb(doc, page_num, dpi).map(|px| {
+                            ocr.recognize_rgb_owned(px.data, px.width, px.height, &options)
+                        })
                     } else {
                         engine
                             .render_page_png(doc, page_num, dpi)

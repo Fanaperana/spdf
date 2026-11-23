@@ -465,7 +465,33 @@ pub fn crop_rotrect(
     out_h: usize,
     flip: bool,
 ) -> Vec<f32> {
-    let mut out = vec![0f32; 3 * out_w * out_h];
+    crop_with(img, r, out_w, out_h, flip, |v| v)
+}
+
+/// [`crop_rotrect`] rounded to 8-bit samples: a quarter of the memory, for
+/// crops that are kept around (line crops live through every recogniser
+/// pass of a page).
+pub fn crop_rotrect_u8(
+    img: &Rgb<'_>,
+    r: &RotRect,
+    out_w: usize,
+    out_h: usize,
+    flip: bool,
+) -> Vec<u8> {
+    crop_with(img, r, out_w, out_h, flip, |v| {
+        v.round().clamp(0.0, 255.0) as u8
+    })
+}
+
+fn crop_with<T: Copy + Default>(
+    img: &Rgb<'_>,
+    r: &RotRect,
+    out_w: usize,
+    out_h: usize,
+    flip: bool,
+    conv: impl Fn(f32) -> T,
+) -> Vec<T> {
+    let mut out = vec![T::default(); 3 * out_w * out_h];
     let plane = out_w * out_h;
     let mut px = [0f32; 3];
     for j in 0..out_h {
@@ -481,9 +507,9 @@ pub fn crop_rotrect(
             let (x, y) = r.at(s, t);
             img.sample(x, y, &mut px);
             let o = j * out_w + i;
-            out[o] = px[0];
-            out[plane + o] = px[1];
-            out[2 * plane + o] = px[2];
+            out[o] = conv(px[0]);
+            out[plane + o] = conv(px[1]);
+            out[2 * plane + o] = conv(px[2]);
         }
     }
     out
@@ -743,5 +769,30 @@ mod tests {
         let f = crop_rotrect(&img, &r, 4, 2, true);
         assert_eq!(f[0], 255.0);
         assert_eq!(f[3], 0.0);
+    }
+
+    #[test]
+    fn u8_crop_rounds_the_f32_crop() {
+        // A diagonal gradient sampled off the pixel grid, so the bilinear
+        // samples are fractional.
+        let (w, h) = (9usize, 7usize);
+        let data: Vec<u8> = (0..w * h * 3).map(|i| ((i * 37) % 256) as u8).collect();
+        let img = Rgb { data: &data, w, h };
+        let r = RotRect {
+            cx: 4.3,
+            cy: 3.1,
+            w: 6.7,
+            h: 3.9,
+            angle: 0.3,
+        };
+        for flip in [false, true] {
+            let f = crop_rotrect(&img, &r, 11, 5, flip);
+            let q = crop_rotrect_u8(&img, &r, 11, 5, flip);
+            assert_eq!(f.len(), q.len());
+            assert!(f.iter().any(|v| v.fract() != 0.0), "samples are fractional");
+            for (a, b) in f.iter().zip(&q) {
+                assert!((a - f32::from(*b)).abs() <= 0.5, "{a} vs {b}");
+            }
+        }
     }
 }
