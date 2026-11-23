@@ -175,6 +175,15 @@ const ORIENT_MAX_ASPECT: f64 = 10.0;
 /// Longest lines read both ways for the reading-direction vote.
 const ORIENT_LINES: usize = 4;
 
+/// A forward-only vote needs at least this many lines, ...
+const ORIENT_SETTLE_LINES: usize = 2;
+
+/// ... this many characters over all of them, ...
+const ORIENT_SETTLE_CHARS: usize = 12;
+
+/// ... and every line's mean character confidence at least this.
+const ORIENT_SETTLE_CONFIDENCE: f64 = 0.8;
+
 /// Built-in neural OCR engine. Cheap to construct: the models and the GPU
 /// device are initialised lazily on the first page that needs OCR.
 pub struct NeuralOcrEngine {
@@ -761,14 +770,16 @@ impl Runtime {
         Ok(())
     }
 
-    /// Re-read lines the mobile model decoded as mostly CJK with the server
-    /// recogniser, which is markedly better on Han / kana glyphs. Latin
-    /// lines stay with the mobile model, whose word spacing is better.
-    fn refine_cjk(&self, crops: &[Crop], recs: &mut [LineRec]) -> SpdfResult<()> {
+    /// Re-read lines the mobile model decoded as mostly CJK, and the lines
+    /// flagged in `known` (already identified as CJK, not read by the mobile
+    /// model at all), with the server recogniser, which is markedly better
+    /// on Han / kana glyphs. Latin lines stay with the mobile model, whose
+    /// word spacing is better.
+    fn refine_cjk(&self, crops: &[Crop], recs: &mut [LineRec], known: &[bool]) -> SpdfResult<()> {
         let idx: Vec<usize> = recs
             .iter()
             .enumerate()
-            .filter(|(_, r)| mostly_cjk(&r.chars))
+            .filter(|&(i, r)| known[i] || mostly_cjk(&r.chars))
             .map(|(i, _)| i)
             .collect();
         if idx.is_empty() {
@@ -1084,6 +1095,43 @@ fn rec_batches(sorted_widths: &[usize], max_n: usize, max_cols: usize) -> Vec<us
     out
 }
 
+/// The orientation vote's read of one line (see `Runtime::reading_angle`):
+/// the line's index among the page's boxes and the decode of its central
+/// part, in the reading direction the vote chose.
+struct VoteRead {
+    line: usize,
+    chars: Vec<ctc::DecodedChar>,
+}
+
+/// Which of `n` lines the orientation vote's reads already show to be CJK
+/// text, so the mobile recogniser need not read them before the server one
+/// does. The vote saw only the central part of a long line, so this asks
+/// for a clear majority (two thirds of the visible characters) rather than
+/// the third [`mostly_cjk`] asks of a whole line: mixed lines keep the
+/// mobile-first path.
+fn known_cjk_lines(n: usize, votes: &[VoteRead]) -> Vec<bool> {
+    let mut known = vec![false; n];
+    for v in votes {
+        let (cjk, total) = cjk_count(&v.chars);
+        if let Some(k) = known.get_mut(v.line) {
+            *k = cjk > 0 && cjk * 3 >= total * 2;
+        }
+    }
+    known
+}
+
+/// CJK and total visible (non-whitespace) characters of a decode.
+fn cjk_count(chars: &[ctc::DecodedChar]) -> (usize, usize) {
+    let (mut cjk, mut total) = (0usize, 0usize);
+    for c in chars.iter().flat_map(|d| d.text.chars()) {
+        if !c.is_whitespace() {
+            total += 1;
+            cjk += usize::from(is_cjk(c));
+        }
+    }
+    (cjk, total)
+}
+
 /// True for Han ideographs, kana, Hangul and CJK punctuation.
 fn is_cjk(c: char) -> bool {
     matches!(c as u32,
@@ -1101,14 +1149,7 @@ fn is_cjk(c: char) -> bool {
 /// A decoded line is CJK when at least a third of its visible characters
 /// are CJK (so one stray glyph on a Latin line does not count).
 fn mostly_cjk(chars: &[ctc::DecodedChar]) -> bool {
-    let (mut cjk, mut total) = (0usize, 0usize);
-    for c in chars.iter().flat_map(|d| d.text.chars()) {
-        if c.is_whitespace() {
-            continue;
-        }
-        total += 1;
-        cjk += usize::from(is_cjk(c));
-    }
+    let (cjk, total) = cjk_count(chars);
     cjk > 0 && cjk * 3 >= total
 }
 
@@ -1134,7 +1175,7 @@ impl Runtime {
             return Ok(Vec::new());
         }
         let t = std::time::Instant::now();
-        let phi = self.reading_angle(img, &boxes)?;
+        let (phi, votes) = self.reading_angle(img, &boxes)?;
         tracing::debug!(ms = t.elapsed().as_millis() as u64, "ocr: orientation");
         // The vote read a few lines with the mobile recogniser: release its
         // weight pages too, so the line pass faults in only what it touches
@@ -1148,14 +1189,28 @@ impl Runtime {
             .collect();
         // Everything below works on the crops; an owned page can go.
         drop(data);
+        // Lines the vote already read as CJK go straight to the server
+        // recogniser, which replaces a mobile read of them anyway.
+        let known_cjk = known_cjk_lines(boxes.len(), &votes);
         let t = std::time::Instant::now();
-        let refs: Vec<&Crop> = crops.iter().collect();
-        let mut recs = self.recognize_crops(&refs)?;
+        let mut recs = self.recognize_lines(&crops, &known_cjk)?;
         release_weights(OcrModel::Mobile);
         crate::memory::trim_pool();
         tracing::debug!(ms = t.elapsed().as_millis() as u64, "ocr: rec");
         let t = std::time::Instant::now();
-        self.refine_cjk(&crops, &mut recs)?;
+        self.refine_cjk(&crops, &mut recs, &known_cjk)?;
+        // A line the server read as nothing falls back to the mobile model,
+        // as a mobile-first line keeps its mobile read in that case.
+        let missed: Vec<usize> = (0..recs.len())
+            .filter(|&i| known_cjk[i] && recs[i].chars.is_empty())
+            .collect();
+        if !missed.is_empty() {
+            let sub: Vec<&Crop> = missed.iter().map(|&i| &crops[i]).collect();
+            for (i, r) in missed.into_iter().zip(self.recognize_crops(&sub)?) {
+                recs[i] = r;
+            }
+            release_weights(OcrModel::Mobile);
+        }
         tracing::debug!(ms = t.elapsed().as_millis() as u64, "ocr: rec cjk");
         let t = std::time::Instant::now();
         self.refine_latin(&crops, &mut recs)?;
@@ -1184,34 +1239,58 @@ impl Runtime {
         Ok(out)
     }
 
+    /// Recognise every line crop with the mobile model, except the lines
+    /// flagged in `skip`, which get an empty read.
+    fn recognize_lines(&self, crops: &[Crop], skip: &[bool]) -> SpdfResult<Vec<LineRec>> {
+        let idx: Vec<usize> = (0..crops.len()).filter(|&i| !skip[i]).collect();
+        let sub: Vec<&Crop> = idx.iter().map(|&i| &crops[i]).collect();
+        let read = if sub.is_empty() {
+            Vec::new()
+        } else {
+            self.recognize_crops(&sub)?
+        };
+        let mut recs: Vec<LineRec> = (0..crops.len())
+            .map(|_| LineRec {
+                chars: Vec::new(),
+                content_steps: 0,
+            })
+            .collect();
+        for (i, r) in idx.into_iter().zip(read) {
+            recs[i] = r;
+        }
+        Ok(recs)
+    }
+
     /// Dominant reading direction of the page in radians (0 = upright,
-    /// ±π/2 = rotated a quarter turn, π = upside down), including skew.
-    fn reading_angle(&self, img: &Rgb<'_>, boxes: &[DetBox]) -> SpdfResult<f64> {
+    /// ±π/2 = rotated a quarter turn, π = upside down), including skew,
+    /// and the vote's reads of the lines it sampled (see [`VoteRead`]).
+    fn reading_angle(&self, img: &Rgb<'_>, boxes: &[DetBox]) -> SpdfResult<(f64, Vec<VoteRead>)> {
         use std::f64::consts::{FRAC_PI_2, PI};
         // Only clearly elongated regions say anything about orientation.
-        let lines: Vec<&DetBox> = boxes
+        let lines: Vec<(usize, &DetBox)> = boxes
             .iter()
-            .filter(|b| b.core.w >= 2.0 * b.core.h)
+            .enumerate()
+            .filter(|(_, b)| b.core.w >= 2.0 * b.core.h)
             .collect();
         if lines.is_empty() {
-            return Ok(0.0);
+            return Ok((0.0, Vec::new()));
         }
         let vert: f64 = lines
             .iter()
-            .filter(|b| b.rect.is_vertical())
-            .map(|b| b.rect.w)
+            .filter(|(_, b)| b.rect.is_vertical())
+            .map(|(_, b)| b.rect.w)
             .sum();
-        let total: f64 = lines.iter().map(|b| b.rect.w).sum();
+        let total: f64 = lines.iter().map(|(_, b)| b.rect.w).sum();
         let vertical = vert > total / 2.0;
-        let mut major: Vec<&DetBox> = lines
+        let mut major: Vec<(usize, &DetBox)> = lines
             .into_iter()
-            .filter(|b| b.rect.is_vertical() == vertical)
+            .filter(|(_, b)| b.rect.is_vertical() == vertical)
             .collect();
         // Median axis angle, unwrapped around the dominant direction.
         let base = if vertical { FRAC_PI_2 } else { 0.0 };
         let mut angles: Vec<f64> = major
             .iter()
-            .map(|b| {
+            .map(|(_, b)| {
                 let mut a = b.rect.angle;
                 while a - base > FRAC_PI_2 {
                     a -= PI;
@@ -1227,23 +1306,92 @@ impl Runtime {
 
         // Vote between the two reading directions along that axis using the
         // recogniser's confidence on the longest lines.
-        major.sort_by(|a, b| b.rect.w.partial_cmp(&a.rect.w).unwrap());
+        major.sort_by(|a, b| b.1.rect.w.partial_cmp(&a.1.rect.w).unwrap());
         major.truncate(ORIENT_LINES);
-        let mut crops = Vec::with_capacity(major.len() * 2);
-        for b in &major {
+        let mut fwd_crops = Vec::with_capacity(major.len());
+        let mut back_crops = Vec::with_capacity(major.len());
+        for (_, b) in &major {
             let r = orient_rect(&align_box(b, axis).rect);
-            crops.push(crop_line(img, &r, false));
-            crops.push(crop_line(img, &r, true));
+            fwd_crops.push(crop_line(img, &r, false));
+            back_crops.push(crop_line(img, &r, true));
         }
-        let refs: Vec<&Crop> = crops.iter().collect();
-        let recs = self.recognize_crops(&refs)?;
-        let (mut fwd, mut back) = (0.0, 0.0);
-        for pair in recs.chunks(2) {
-            fwd += ctc::line_confidence(&pair[0].chars) * pair[0].chars.len().max(1) as f64;
-            back += ctc::line_confidence(&pair[1].chars) * pair[1].chars.len().max(1) as f64;
-        }
-        Ok(if back > fwd * 1.15 { axis + PI } else { axis })
+        // Horizontal lines are upright far more often than upside down, so
+        // read them forward first: a confident forward read settles the
+        // vote without reading the flipped crops (see `forward_settles`).
+        // Quarter-turn pages go either way, so both directions are read in
+        // one batch.
+        let (fwd_recs, back_recs) = if vertical {
+            let refs: Vec<&Crop> = fwd_crops
+                .iter()
+                .zip(&back_crops)
+                .flat_map(|(f, b)| [f, b])
+                .collect();
+            let mut recs = self.recognize_crops(&refs)?.into_iter();
+            let (mut f, mut b) = (Vec::new(), Vec::new());
+            while let (Some(x), Some(y)) = (recs.next(), recs.next()) {
+                f.push(x.chars);
+                b.push(y.chars);
+            }
+            (f, Some(b))
+        } else {
+            let refs: Vec<&Crop> = fwd_crops.iter().collect();
+            let f: Vec<_> = self
+                .recognize_crops(&refs)?
+                .into_iter()
+                .map(|r| r.chars)
+                .collect();
+            let b = if forward_settles(&f) {
+                None
+            } else {
+                let refs: Vec<&Crop> = back_crops.iter().collect();
+                Some(
+                    self.recognize_crops(&refs)?
+                        .into_iter()
+                        .map(|r| r.chars)
+                        .collect(),
+                )
+            };
+            (f, b)
+        };
+        let flipped = back_recs
+            .as_ref()
+            .is_some_and(|b| vote_score(b) > vote_score(&fwd_recs) * 1.15);
+        // A voted line's final crop reads in the chosen direction, so the
+        // vote's read in that direction is a sample of the line's text.
+        let chosen = match back_recs {
+            Some(b) if flipped => b,
+            _ => fwd_recs,
+        };
+        let reads = major
+            .iter()
+            .zip(chosen)
+            .map(|(&(line, _), chars)| VoteRead { line, chars })
+            .collect();
+        Ok((if flipped { axis + PI } else { axis }, reads))
     }
+}
+
+/// One direction's weight in the reading-direction vote: each line's mean
+/// character confidence times its character count (at least one).
+fn vote_score(reads: &[Vec<ctc::DecodedChar>]) -> f64 {
+    reads
+        .iter()
+        .map(|r| ctc::line_confidence(r) * r.len().max(1) as f64)
+        .sum()
+}
+
+/// Whether forward reads of the vote's lines settle the vote on their own.
+/// Text read in the wrong direction decodes to a few low-confidence
+/// characters at most (mean confidence near 0), so several lines that all
+/// read back as substantial, confident text are upright; anything less
+/// clear-cut also reads the flipped crops.
+fn forward_settles(reads: &[Vec<ctc::DecodedChar>]) -> bool {
+    let chars: usize = reads.iter().map(Vec::len).sum();
+    reads.len() >= ORIENT_SETTLE_LINES
+        && chars >= ORIENT_SETTLE_CHARS
+        && reads
+            .iter()
+            .all(|r| r.len() >= 2 && ctc::line_confidence(r) >= ORIENT_SETTLE_CONFIDENCE)
 }
 
 /// True when the fast detection pass is not trustworthy: it found no text,
@@ -1792,6 +1940,67 @@ mod tests {
         assert!(!mostly_cjk(&decoded("Total revenue 中 was up")));
         assert!(!mostly_cjk(&decoded("")));
         assert!(!mostly_cjk(&decoded("   ")));
+    }
+
+    #[test]
+    fn vote_reads_flag_only_clearly_cjk_lines() {
+        let vote = |line: usize, s: &str| VoteRead {
+            line,
+            chars: decoded(s),
+        };
+        let votes = [
+            vote(0, "第三季度总收入为一千二百万元。"),
+            vote(2, "Total revenue was up"),
+            // Mostly CJK by `mostly_cjk`'s third, but not a clear majority
+            // of a sample: keep the mobile-first path for the whole line.
+            vote(3, "Q3 收入 sales 总额"),
+            vote(4, "한국어 텍스트"),
+            vote(5, ""),
+            // A stale index never panics.
+            vote(9, "第三季度"),
+        ];
+        assert_eq!(
+            known_cjk_lines(6, &votes),
+            [true, false, false, false, true, false]
+        );
+        assert!(mostly_cjk(&decoded("Q3 收入 sales 总额")));
+        assert_eq!(known_cjk_lines(2, &[]), [false, false]);
+    }
+
+    fn read(s: &str, prob: f32) -> Vec<ctc::DecodedChar> {
+        let mut d = decoded(s);
+        for c in &mut d {
+            c.prob = prob;
+        }
+        d
+    }
+
+    #[test]
+    fn confident_forward_reads_settle_the_vote() {
+        let upright = [
+            read("Quarterly revenue", 0.95),
+            read("税单依赖正确的阅读", 0.99),
+        ];
+        assert!(forward_settles(&upright));
+        // A single line, too little text, an empty or a doubtful read: the
+        // flipped crops must be read too.
+        assert!(!forward_settles(&upright[..1]));
+        assert!(!forward_settles(&[read("Total", 0.99), read("Q3", 0.99)]));
+        assert!(!forward_settles(&[
+            read("Quarterly revenue", 0.95),
+            read("", 0.0)
+        ]));
+        assert!(!forward_settles(&[
+            read("Quarterly revenue", 0.95),
+            read("sdaay an o s n s", 0.42),
+        ]));
+        assert!(!forward_settles(&[]));
+    }
+
+    #[test]
+    fn vote_score_weights_confidence_by_length() {
+        let s = vote_score(&[read("abcd", 0.5), read("", 0.0)]);
+        assert!((s - 2.0).abs() < 1e-6, "{s}");
     }
 
     #[test]
